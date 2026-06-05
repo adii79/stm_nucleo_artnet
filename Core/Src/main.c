@@ -114,6 +114,31 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+	  MX_LWIP_Process();
+
+	 	   HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+	 	       dmx_universes[0].data[0] > 127 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+	 	   // LD2 (blue) — blinks only when DMX packets are actively arriving
+	 	   static uint32_t last_packet_count = 0;
+	 	   static uint32_t last_blink_ms = 0;
+	 	   static uint8_t  led_state = 0;
+
+	 	   uint32_t now = HAL_GetTick();
+	 	   if (dmx_universes[0].packet_count != last_packet_count) {
+	 	       last_packet_count = dmx_universes[0].packet_count;
+	 	       last_blink_ms = now;
+	 	   }
+
+	 	   if (now - last_blink_ms < 500) {
+	 	       if (now % 200 < 100)
+	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+	 	       else
+	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+	 	   } else {
+	 	       HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+	 	   }
   }
   /* USER CODE END 3 */
 }
