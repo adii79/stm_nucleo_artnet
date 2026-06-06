@@ -22,8 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <string.h>
 #include "artnet.h"
 #include "dmx_buffer.h"
+#include "neo_pixel.h"
 // #include "lwip/netif.h"
 /* USER CODE END Includes */
 
@@ -34,7 +36,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+//#define NUMBER_OF_LEDS  12
+#define NUMBER_OF_LEDS  50
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -43,22 +46,28 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim6;
+DMA_HandleTypeDef hdma_tim3_ch1_trig;
 
 UART_HandleTypeDef huart3;
 
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
-
+neopixel_led leds[NUMBER_OF_LEDS + 1];
+static rgb_color dmx_colors[NUMBER_OF_LEDS];
+static uint8_t dma_busy1 = 0;                // guard flag
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_TIM6_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -97,14 +106,32 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM6_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_LWIP_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
     artnet_init();
 
     // netif_set_flags(&gnetif, NETIF_FLAG_BROADCAST);
+
+//    rgb_color rainbow[NUMBER_OF_LEDS] = {
+//        {255, 0,   0},
+//        {255, 127, 0},
+//        {255, 255, 0},
+//        {0,   255, 0},
+//        {0,   0,   255},
+//        {75,  0,   130},
+//        {148, 0,   211},
+//        {255, 0,   0},
+//        {255, 127, 0},
+//        {255, 255, 0},
+//        {0,   255, 0},
+//        {0,   0,   255},
+//    };
+//    uint16_t offset = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -115,30 +142,204 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
+//	  MX_LWIP_Process();
+//
+//	 	   HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	 	       dmx_universes[0].data[0] > 127 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	 	   // LD2 (blue) — blinks only when DMX packets are actively arriving
+//	 	   static uint32_t last_packet_count = 0;
+//	 	   static uint32_t last_blink_ms = 0;
+//	 	   static uint8_t  led_state = 0;
+//
+//	 	   uint32_t now = HAL_GetTick();
+//	 	   if (dmx_universes[0].packet_count != last_packet_count) {
+//	 	       last_packet_count = dmx_universes[0].packet_count;
+//	 	       last_blink_ms = now;
+//	 	   }
+//
+//	 	   if (now - last_blink_ms < 500) {
+//	 	       if (now % 200 < 100)
+//	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+//	 	       else
+//	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+//	 	   } else {
+//	 	       HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+//	 	   }
+//	 	  rgb_color rotated[NUMBER_OF_LEDS];
+//	 	  	    for (int i = 0; i < NUMBER_OF_LEDS; i++)
+//	 	  	        rotated[i] = rainbow[(i + offset) % NUMBER_OF_LEDS];
+//
+//	 	  	    set_pattern_led(leds, rotated, NUMBER_OF_LEDS);
+//	 	  	    HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1, (uint32_t *)leds, NUMBER_OF_LEDS * 24 + 24);
+//	 	  	    HAL_Delay(100);
+//
+//	 	  	    offset = (offset + 1) % NUMBER_OF_LEDS;
+
+//
+//	  MX_LWIP_Process();
+//
+//	    /* --- Status LEDs -------------------------------------------------- */
+//	    HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	        dmx_universes[0].data[0] > 127 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	    static uint32_t last_packet_count = 0;
+//	    static uint32_t last_blink_ms     = 0;
+//
+//	    uint32_t now = HAL_GetTick();
+//	    if (dmx_universes[0].packet_count != last_packet_count) {
+//	        last_packet_count = dmx_universes[0].packet_count;
+//	        last_blink_ms     = now;
+//	    }
+//	    HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	        (now - last_blink_ms < 500) && (now % 200 < 100)
+//	            ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	    /* --- Read active LED count from CH1 (data[0]) --------------------- */
+//	    // Sender puts 0–50 directly in CH1
+//	    uint8_t active_leds = dmx_universes[0].data[0];
+//	    if (active_leds > NUMBER_OF_LEDS) active_leds = NUMBER_OF_LEDS;
+//
+//	    /* --- Build colours from CH2 onwards (data[1..]) ------------------- */
+//	    // CH2,3,4 = LED0 R,G,B  |  CH5,6,7 = LED1 R,G,B  |  ...
+//	    // Max channels used: 1 + (50 * 3) = 151 — fits easily in one universe
+//	    static rgb_color dmx_colors[NUMBER_OF_LEDS];
+//	    memset(dmx_colors, 0, sizeof(dmx_colors));
+//
+//	    if (dmx_universes[0].valid && active_leds > 0) {
+//	        for (uint8_t i = 0; i < active_leds; i++) {
+//	            dmx_colors[i].r = dmx_universes[0].data[1 + i * 3 + 0];
+//	            dmx_colors[i].g = dmx_universes[0].data[1 + i * 3 + 1];
+//	            dmx_colors[i].b = dmx_universes[0].data[1 + i * 3 + 2];
+//	        }
+//	    } else {
+//	        // No signal — dim red on LED 0 as waiting indicator
+//	        dmx_colors[0].r = 32;
+//	    }
+//
+//	    /* --- Push to strip ------------------------------------------------ */
+//	    set_pattern_led(leds, dmx_colors, NUMBER_OF_LEDS);
+//	    HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
+//	                          (uint32_t *)leds,
+//	                          NUMBER_OF_LEDS * 24 + 24);
+//	  HAL_Delay(20);
+
+
+
+//	  MX_LWIP_Process();
+//
+//	     /* --- Status LEDs -------------------------------------------------- */
+//	     static uint32_t last_packet_count = 0;
+//	     static uint32_t last_blink_ms     = 0;
+//
+//	     uint32_t now = HAL_GetTick();
+//	     if (dmx_universes[0].packet_count != last_packet_count) {
+//	         last_packet_count = dmx_universes[0].packet_count;
+//	         last_blink_ms     = now;
+//	     }
+//	     // LD1 — ON when any master colour is non-zero
+//	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	     // LD2 — blinks while DMX packets are arriving
+//	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	         (now - last_blink_ms < 500) && (now % 200 < 100)
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	     /* --- Read master RGB (CH1, CH2, CH3) ------------------------------ */
+//	     uint8_t master_r = dmx_universes[0].data[0];   // CH1
+//	     uint8_t master_g = dmx_universes[0].data[1];   // CH2
+//	     uint8_t master_b = dmx_universes[0].data[2];   // CH3
+//
+//	     /* --- Build colours — master + per-LED ----------------------------- */
+//	     // Per-LED starts at data[3] (CH4)
+//	     // LED i → data[3 + i*3 + 0/1/2]
+//	     // Total: 3 + (50*3) = 153 channels — fits in one universe
+//	     static rgb_color dmx_colors[NUMBER_OF_LEDS];
+//
+//	     if (dmx_universes[0].valid) {
+//	         for (uint8_t i = 0; i < NUMBER_OF_LEDS; i++) {
+//	             uint16_t r = (uint16_t)master_r + dmx_universes[0].data[3 + i * 3 + 0];
+//	             uint16_t g = (uint16_t)master_g + dmx_universes[0].data[3 + i * 3 + 1];
+//	             uint16_t b = (uint16_t)master_b + dmx_universes[0].data[3 + i * 3 + 2];
+//
+//	             dmx_colors[i].r = r > 255 ? 255 : (uint8_t)r;
+//	             dmx_colors[i].g = g > 255 ? 255 : (uint8_t)g;
+//	             dmx_colors[i].b = b > 255 ? 255 : (uint8_t)b;
+//	         }
+//	     } else {
+//	         // No signal — dim red on LED 0 as waiting indicator
+//	         memset(dmx_colors, 0, sizeof(dmx_colors));
+//	         dmx_colors[0].r = 32;
+//	     }
+//
+//	     /* --- Push to strip ------------------------------------------------ */
+//	     set_pattern_led(leds, dmx_colors, NUMBER_OF_LEDS);
+//	     HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
+//	                           (uint32_t *)leds,
+//	                           NUMBER_OF_LEDS * 24 + 24);
+//	     HAL_Delay(20);
+
+
 	  MX_LWIP_Process();
 
-	 	   HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
-	 	       dmx_universes[0].data[0] > 127 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+	     /* --- Status LEDs -------------------------------------------------- */
+	     static uint32_t last_packet_count = 0;
+	     static uint32_t last_blink_ms     = 0;
 
-	 	   // LD2 (blue) — blinks only when DMX packets are actively arriving
-	 	   static uint32_t last_packet_count = 0;
-	 	   static uint32_t last_blink_ms = 0;
-	 	   static uint8_t  led_state = 0;
+	     uint32_t now = HAL_GetTick();
+	     if (dmx_universes[0].packet_count != last_packet_count) {
+	         last_packet_count = dmx_universes[0].packet_count;
+	         last_blink_ms     = now;
+	     }
+	     // LD1 — ON when any master colour is non-zero
+	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-	 	   uint32_t now = HAL_GetTick();
-	 	   if (dmx_universes[0].packet_count != last_packet_count) {
-	 	       last_packet_count = dmx_universes[0].packet_count;
-	 	       last_blink_ms = now;
-	 	   }
+	     // LD2 — blinks while DMX packets are arriving
+	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+	         (now - last_blink_ms < 500) && (now % 200 < 100)
+	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-	 	   if (now - last_blink_ms < 500) {
-	 	       if (now % 200 < 100)
-	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-	 	       else
-	 	           HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-	 	   } else {
-	 	       HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-	 	   }
+	     /* --- Read master RGB (CH1, CH2, CH3) ------------------------------ */
+	     uint8_t master_r = dmx_universes[0].data[0];   // CH1
+	     uint8_t master_g = dmx_universes[0].data[1];   // CH2
+	     uint8_t master_b = dmx_universes[0].data[2];   // CH3
+
+	     /* --- Build colours — master + per-LED ----------------------------- */
+	     // Per-LED starts at data[3] (CH4)
+	     // LED i → data[3 + i*3 + 0/1/2]
+	     // Total: 3 + (50*3) = 153 channels — fits in one universe
+	     static rgb_color dmx_colors[NUMBER_OF_LEDS];
+
+	     if (dmx_universes[0].valid) {
+	         for (uint8_t i = 0; i < NUMBER_OF_LEDS; i++) {
+	             uint16_t r = (uint16_t)master_r + dmx_universes[0].data[3 + i * 3 + 0];
+	             uint16_t g = (uint16_t)master_g + dmx_universes[0].data[3 + i * 3 + 1];
+	             uint16_t b = (uint16_t)master_b + dmx_universes[0].data[3 + i * 3 + 2];
+
+	             dmx_colors[i].r = r > 255 ? 255 : (uint8_t)r;
+	             dmx_colors[i].g = g > 255 ? 255 : (uint8_t)g;
+	             dmx_colors[i].b = b > 255 ? 255 : (uint8_t)b;
+	         }
+	     } else {
+	         // No signal — dim red on LED 0 as waiting indicator
+	         memset(dmx_colors, 0, sizeof(dmx_colors));
+	         dmx_colors[0].r = 32;
+	     }
+
+	     /* --- Push to strip ------------------------------------------------ */
+	     set_pattern_led(leds, dmx_colors, NUMBER_OF_LEDS);
+	     HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
+	                           (uint32_t *)leds,
+	                           NUMBER_OF_LEDS * 24 + 24);
+	     HAL_Delay(20);
+
+
+	  // dmx data on 2 pins(pwm pc7 and )
+
   }
   /* USER CODE END 3 */
 }
@@ -186,6 +387,55 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 3;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 24;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
 }
 
 /**
@@ -295,6 +545,22 @@ static void MX_USB_OTG_FS_PCD_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -352,7 +618,15 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/* USER CODE BEGIN 4 */
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM3) {
+        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
+        dma_busy1 = 0;
+    }
 
+}
 /* USER CODE END 4 */
 
 /**
