@@ -12,11 +12,17 @@ typedef struct
 } rgb_color;
 
 // structure for one NeoPixel LED
-typedef struct
-{
-    uint16_t g[8];
-    uint16_t r[8];
-    uint16_t b[8];
+//typedef struct
+//{
+//    uint16_t g[8];
+//    uint16_t r[8];
+//    uint16_t b[8];
+//} neopixel_led;
+
+typedef struct {
+    uint16_t r[8];   // WS2811: R first
+    uint16_t g[8];   // G second
+    uint16_t b[8];   // B third
 } neopixel_led;
 
 // 1.25 us - period
