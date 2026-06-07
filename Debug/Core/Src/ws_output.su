@@ -1,0 +1,10 @@
+../Core/Src/ws_output.c:94:13:build_colors	32	static
+../Core/Src/ws_output.c:115:13:start_burst	528	static
+../Core/Src/ws_output.c:129:13:start_reset	16	static
+../Core/Src/ws_output.c:163:13:init_apb1_timer	48	static
+../Core/Src/ws_output.c:184:13:init_apb2_timer_tim1	80	static
+../Core/Src/ws_output.c:213:13:init_dma_stream	24	static
+../Core/Src/ws_output.c:234:13:init_gpio_af	40	static
+../Core/Src/ws_output.c:248:6:ws_output_init	64	static
+../Core/Src/ws_output.c:387:9:ws_output_update_all	16	static
+../Core/Src/ws_output.c:410:6:ws_output_dma_done_callback	32	static
