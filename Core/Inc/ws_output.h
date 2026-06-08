@@ -1,84 +1,60 @@
+//#ifndef INC_WS_OUTPUT_H_
+//#define INC_WS_OUTPUT_H_
+//
+//#include <stdint.h>
+//
+///*
+// * ws_output.h — 8-pin parallel WS2811, chunked circular DMA
+// *
+// * Group A — TIM1 (APB2, PSC=3, ARR=55)
+// *   CH1 PE9   Strip 0  Madrix universes  1, 2, 3
+// *   CH2 PE11  Strip 1  Madrix universes  4, 5, 6
+// *   CH3 PE13  Strip 2  Madrix universes  7, 8, 9
+// *   CH4 PE14  Strip 3  Madrix universes 10,11,12
+// *
+// * Group B — TIM3 (APB1, PSC=3, ARR=24)
+// *   CH1 PA6   Strip 4  Madrix universes 13,14,15
+// *   CH2 PC7   Strip 5  Madrix universes 16,17,18
+// *   CH3 PC8   Strip 6  Madrix universes 19,20,21
+// *   CH4 PB1   Strip 7  Madrix universes 22,23,24
+// */
+//
+//void WS_Output_Init(void);//
+//void WS_Output_Update(void);
+//
+//#endif /* INC_WS_OUTPUT_H_ */
+
+
+
+
 #ifndef INC_WS_OUTPUT_H_
 #define INC_WS_OUTPUT_H_
 
-/*
- * ws_output.h
- *
- * 8-output, 510-LED-per-output, RAM-optimised WS2811/WS2812 driver.
- *
- * ┌──────────────────────────────────────────────────────────────────┐
- * │  RAM budget (DMA buffers only)                                   │
- * │                                                                  │
- * │  Strategy: STREAMING – one 170-LED (1-universe) flat buffer     │
- * │  per output, refreshed in 3 successive DMA bursts.              │
- * │                                                                  │
- * │  Per output: 1 × 170 × 24 × 2 B = 8 160 B                      │
- * │  8 outputs : 8 × 8 160           = 65 280 B ≈ 63.8 KB          │
- * │                                                                  │
- * │  Compare with NAIVE full-strip struct approach:                  │
- * │  8 × 511 × 48 B = 196 224 B ≈ 192 KB  ← exceeds F429 SRAM!    │
- * └──────────────────────────────────────────────────────────────────┘
- *
- * Streaming sequence per output
- * ──────────────────────────────
- *   Universe 0 data → encode → DMA → HAL callback → universe 1 …
- *   After universe 2 DMA complete → reset words → done.
- *   Then restart from universe 0 on next loop iteration.
- *
- * Hardware mapping
- * ────────────────
- *   Output │ Timer │ CH │ Pin  │ DMA            │ Universe range
- *   ───────┼───────┼────┼──────┼────────────────┼───────────────
- *     0    │ TIM3  │  1 │ PA6  │ DMA1 S4 CH5    │  0, 1, 2
- *     1    │ TIM3  │  2 │ PC7  │ DMA1 S5 CH5    │  3, 4, 5
- *     2    │ TIM3  │  3 │ PC8  │ DMA1 S7 CH5    │  6, 7, 8
- *     3    │ TIM3  │  4 │ PB1  │ DMA1 S2 CH5    │  9,10,11
- *     4    │ TIM4  │  1 │ PD12 │ DMA1 S0 CH2    │ 12,13,14
- *     5    │ TIM4  │  2 │ PD13 │ DMA1 S3 CH2    │ 15,16,17
- *     6    │ TIM1  │  2 │ PE11 │ DMA2 S2 CH6    │ 18,19,20
- *     7    │ TIM1  │  3 │ PE13 │ DMA2 S6 CH6    │ 21,22,23
- *
- * Notes
- * ─────
- * • TIM3 and TIM4 are on APB1 (84 MHz timer clock).
- * • TIM1 is on APB2 (168 MHz timer clock).
- *   TIM1 uses different prescaler/ARR values — see ws_output.c.
- * • All timers are configured at run-time inside ws_output_init()
- *   so you do NOT need CubeMX to touch TIM3/TIM4/TIM1 PWM settings.
- *   Only the DMA and GPIO alternate-function setup are done here.
- * • If you already have CubeMX-generated TIM3/TIM4 init, comment out
- *   the relevant timer config in ws_output_init() and call the CubeMX
- *   version instead — just make sure PRE=3, ARR=25 for APB1 timers.
- */
-
-#include "stm32f4xx_hal.h"
-#include "neo_pixel.h"      /* rgb_color, WS_* constants               */
-#include "dmx_buffer.h"     /* DMX_Universe_t, dmx_universes[]         */
-
-/* ------------------------------------------------------------------ */
-#define WS_NUM_OUTPUTS      8u
-
-/* ------------------------------------------------------------------ */
-/* Call once after all clocks and DMA are initialised                  */
-void ws_output_init(void);
+#include <stdint.h>
 
 /*
- * ws_output_update_all()
+ * ws_output.h — 8-pin parallel WS2811, per-channel DMA + double-buffer
  *
- * To be called from the main loop.  For each output it checks whether
- * the previous DMA burst has finished; if so it prepares the next
- * universe chunk and kicks the DMA.
+ * Group A — TIM1 (APB2, PSC=3, ARR=55  → ~804 kHz)
+ *   CH1 PE9   Strip 0  internal universes  0, 1, 2  (Madrix  1, 2, 3)
+ *   CH2 PE11  Strip 1  internal universes  3, 4, 5  (Madrix  4, 5, 6)
+ *   CH3 PE13  Strip 2  internal universes  6, 7, 8  (Madrix  7, 8, 9)
+ *   CH4 PE14  Strip 3  internal universes  9,10,11  (Madrix 10,11,12)
  *
- * Returns the number of outputs that were idle (0 = all busy).
+ * Group B — TIM3 (APB1, PSC=3, ARR=24  → 800 kHz)
+ *   CH1 PA6   Strip 4  internal universes 12,13,14  (Madrix 13,14,15)
+ *   CH2 PC7   Strip 5  internal universes 15,16,17  (Madrix 16,17,18)
+ *   CH3 PC8   Strip 6  internal universes 18,19,20  (Madrix 19,20,21)
+ *   CH4 PB1   Strip 7  internal universes 21,22,23  (Madrix 22,23,24)
+ *
+ * Each strip drives 510 LEDs (3 universes × 170 LEDs × 3 ch = 1530 DMX ch).
+ * Total: 8 strips × 510 LEDs = 4080 LEDs.
+ *
+ * DMA requirement (set in stm32f4xx_hal_msp.c):
+ *   ALL 8 DMA streams MUST use  DMA_CIRCULAR  mode.
  */
-uint8_t ws_output_update_all(void);
 
-/*
- * ws_output_dma_done_callback()
- *
- * Must be called from HAL_TIM_PWM_PulseFinishedCallback().
- * Handles the streaming state machine for each output.
- */
-void ws_output_dma_done_callback(TIM_HandleTypeDef *htim);
+void WS_Output_Init(void);
+void WS_Output_Update(void);
 
 #endif /* INC_WS_OUTPUT_H_ */

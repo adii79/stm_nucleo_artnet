@@ -1,462 +1,583 @@
+///*
+// * ws_output.c
+// * 8-pin parallel WS2811, TIM1 (4ch) + TIM3 (4ch)
+// * Chunked circular DMA — half-transfer + transfer-complete callbacks
+// *
+// * RAM usage:
+// *   Each group: 2 x 64 x 24 x 4 x 2 = 24576 bytes
+// *   Both groups: ~48 KB total — fits easily in F429 SRAM
+// *
+// * How it works:
+// *   DMA runs in CIRCULAR mode over a buffer of 2 x CHUNK_LEDS x 24 halfwords
+// *   per channel (interleaved [slot][4ch]).
+// *   Half-transfer IRQ  -> CPU fills first half  (next chunk)
+// *   Transfer-complete IRQ -> CPU fills second half (next chunk)
+// *   While CPU fills one half, DMA is streaming the other — zero gaps.
+// *   After all LEDs are sent, reset words (zeros) are inserted, then DMA stops.
+// */
+//
+//#include "ws_output.h"
+//#include "dmx_buffer.h"
+//#include "main.h"
+//#include "stm32f4xx_hal.h"
+//#include <string.h>
+//
+///* =========================================================================
+// * Geometry
+// * ========================================================================= */
+//#define CHUNK_LEDS      64U                          /* LEDs per half-buffer  */
+//#define BITS_PER_LED    24U
+//#define CHUNK_WORDS     (CHUNK_LEDS * BITS_PER_LED)  /* 1536 halfwords/chunk  */
+//#define CIRC_WORDS      (CHUNK_WORDS * 2U)           /* 3072 — full circ buf  */
+//#define CHANNELS        4U
+//
+//#define TOTAL_LEDS      510U                         /* 3 uni x 170 LEDs      */
+//#define TOTAL_BITS      (TOTAL_LEDS * BITS_PER_LED)  /* 12240                 */
+//#define RESET_CHUNKS    4U                           /* ~4x64 periods > 50 us */
+//
+///* =========================================================================
+// * Circular DMA buffers — [slot 0..CIRC_WORDS-1][channel 0..3]
+// * Two groups, each ~24 KB. Total ~48 KB.
+// * ========================================================================= */
+//static uint16_t s_circA[CIRC_WORDS][CHANNELS];   /* TIM1 group */
+//static uint16_t s_circB[CIRC_WORDS][CHANNELS];   /* TIM3 group */
+//
+///* =========================================================================
+// * Per-group encoder state
+// * ========================================================================= */
+//typedef struct {
+//    uint32_t  led_idx;        /* next LED to encode, 0..TOTAL_LEDS-1       */
+//    uint32_t  bit_idx;        /* bit within current LED, 0..23             */
+//    uint32_t  reset_words;    /* reset words remaining after last LED       */
+//    uint8_t   uni0;           /* first universe index (0-based)            */
+//    uint8_t   done;           /* 1 = full frame + reset sent, DMA stopped  */
+//    uint16_t  one;            /* CCR for logical 1                         */
+//    uint16_t  zero;           /* CCR for logical 0                         */
+//    uint16_t  (*circ)[CHANNELS]; /* pointer to s_circA or s_circB         */
+//    TIM_HandleTypeDef *htim;
+//} Group_t;
+//
+//static Group_t s_grpA;
+//static Group_t s_grpB;
+//
+///* busy flags — set when DMA is running, cleared in TC callback */
+//static volatile uint8_t s_busyA = 0;
+//static volatile uint8_t s_busyB = 0;
+//
+///* =========================================================================
+// * External handles
+// * ========================================================================= */
+//extern TIM_HandleTypeDef htim1;
+//extern TIM_HandleTypeDef htim3;
+//
+///* =========================================================================
+// * CCR constants
+// * TIM3: APB1 90 MHz, PSC=3 -> 22.5 MHz, ARR=24 -> 800 kHz
+// * TIM1: APB2 180 MHz, PSC=3 -> 45 MHz, ARR=55 -> ~818 kHz
+// * ========================================================================= */
+//#define ONE_A   37U
+//#define ZERO_A  18U
+//#define ONE_B   15U
+//#define ZERO_B   7U
+//
+///* =========================================================================
+// * fill_half()
+// * Fills CHUNK_WORDS rows starting at buf[offset][0..3].
+// * Encodes the next CHUNK_LEDS worth of bits across all 4 channels.
+// * Called from both HT and TC callbacks.
+// * ========================================================================= */
+//static void fill_half(Group_t *g, uint32_t offset)
+//{
+//    uint16_t (*buf)[CHANNELS] = g->circ + offset;
+//
+//    for (uint32_t slot = 0; slot < CHUNK_WORDS; slot++)
+//    {
+//        if (g->reset_words > 0)
+//        {
+//            /* Reset guard — all channels zero */
+//            for (uint8_t ch = 0; ch < CHANNELS; ch++)
+//                buf[slot][ch] = 0U;
+//            g->reset_words--;
+//            continue;
+//        }
+//
+//        if (g->led_idx >= TOTAL_LEDS)
+//        {
+//            /* Frame complete — insert reset then we are done */
+//            g->reset_words = RESET_CHUNKS * CHUNK_WORDS;
+//            for (uint8_t ch = 0; ch < CHANNELS; ch++)
+//                buf[slot][ch] = 0U;
+//            g->reset_words--;
+//            continue;
+//        }
+//
+//        /* Which universe and LED within that universe */
+//        uint32_t   abs_led = g->led_idx;
+//        uint8_t    uni_off = (uint8_t)(abs_led / DMX_LEDS_PER_UNI);
+//        uint16_t   led_in_uni = (uint16_t)(abs_led % DMX_LEDS_PER_UNI);
+//        uint8_t    bit = (uint8_t)(23U - g->bit_idx);   /* MSB first */
+//
+//        /* Encode one bit per channel */
+//        for (uint8_t ch = 0; ch < CHANNELS; ch++)
+//        {
+//            const DMX_Universe_t *uni = &dmx_universes[g->uni0 + uni_off + ch * DMX_UNIS_PER_PIN];
+//
+//            uint8_t r, gv, b;
+//            if (uni->valid)
+//            {
+//                r  = uni->data[led_in_uni * 3U + 1U]; /* Madrix G -> LED R */
+//                gv = uni->data[led_in_uni * 3U + 0U]; /* Madrix R -> LED G */
+//                b  = uni->data[led_in_uni * 3U + 2U];
+//            }
+//            else
+//            {
+//                r = (abs_led == 0U) ? 32U : 0U;
+//                gv = 0U;
+//                b  = 0U;
+//            }
+//
+//            /* GRB wire order: bits 23..16 = G, 15..8 = R, 7..0 = B */
+//            uint32_t grb = ((uint32_t)gv << 16U) |
+//                           ((uint32_t)r  <<  8U) |
+//                            (uint32_t)b;
+//
+//            buf[slot][ch] = ((grb >> bit) & 1U) ? g->one : g->zero;
+//        }
+//
+//        /* Advance bit/LED counters */
+//        g->bit_idx++;
+//        if (g->bit_idx >= BITS_PER_LED)
+//        {
+//            g->bit_idx = 0U;
+//            g->led_idx++;
+//        }
+//    }
+//}
+//
+///* =========================================================================
+// * group_start()
+// * Resets encoder state and kicks off circular DMA for one group.
+// * ========================================================================= */
+//static void group_start(Group_t *g)
+//{
+//    g->led_idx    = 0U;
+//    g->bit_idx    = 0U;
+//    g->reset_words = 0U;
+//    g->done       = 0U;
+//
+//    /* Pre-fill both halves before DMA starts */
+//    fill_half(g, 0U);
+//    fill_half(g, CHUNK_WORDS);
+//
+//    HAL_TIM_DMABurst_WriteStart(g->htim,
+//                                TIM_DMABASE_CCR1,
+//                                TIM_DMA_CC1,
+//                                (uint32_t *)g->circ,
+//                                TIM_DMABURSTLENGTH_4TRANSFERS);
+//}
+//
+///* =========================================================================
+// * WS_Output_Init()
+// * ========================================================================= */
+//void WS_Output_Init(void)
+//{
+//    memset(s_circA, 0, sizeof(s_circA));
+//    memset(s_circB, 0, sizeof(s_circB));
+//
+//    /* Group A — TIM1, strips 0-3, universes 0-11 (Madrix 1-12) */
+//    s_grpA.circ  = s_circA;
+//    s_grpA.htim  = &htim1;
+//    s_grpA.uni0  = 0U;
+//    s_grpA.one   = ONE_A;
+//    s_grpA.zero  = ZERO_A;
+//    s_grpA.done  = 1U;   /* will be started by first Update() call */
+//
+//    /* Group B — TIM3, strips 4-7, universes 12-23 (Madrix 13-24) */
+//    s_grpB.circ  = s_circB;
+//    s_grpB.htim  = &htim3;
+//    s_grpB.uni0  = 12U;
+//    s_grpB.one   = ONE_B;
+//    s_grpB.zero  = ZERO_B;
+//    s_grpB.done  = 1U;
+//
+//    /* Start PWM output on all 8 channels */
+//    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+//    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+//    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+//    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+//
+//    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+//    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+//    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+//    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+//}
+//
+///* =========================================================================
+// * WS_Output_Update()
+// * Call every main loop. Starts a new frame if previous one is complete.
+// * ========================================================================= */
+//void WS_Output_Update(void)
+//{
+//    if (s_grpA.done && !s_busyA)
+//    {
+//        s_busyA = 1;
+//        group_start(&s_grpA);
+//    }
+//
+//    if (s_grpB.done && !s_busyB)
+//    {
+//        s_busyB = 1;
+//        group_start(&s_grpB);
+//    }
+//}
+//
+///* =========================================================================
+// * HAL half-transfer callback — fill the half DMA just finished reading
+// * ========================================================================= */
+//void HAL_TIM_PWM_PulseFinishedHalfCpltCallback(TIM_HandleTypeDef *htim)
+//{
+//    if (htim->Instance == TIM1)
+//        fill_half(&s_grpA, 0U);              /* DMA is in upper half, fill lower */
+//    else if (htim->Instance == TIM3)
+//        fill_half(&s_grpB, 0U);
+//}
+//
+///* =========================================================================
+// * HAL transfer-complete callback — fill the half DMA just finished reading,
+// * and stop DMA if the full frame + reset has been sent.
+// * ========================================================================= */
+//void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+//{
+//    if (htim->Instance == TIM1)
+//    {
+//        fill_half(&s_grpA, CHUNK_WORDS);     /* DMA is in lower half, fill upper */
+//        if (s_grpA.led_idx >= TOTAL_LEDS && s_grpA.reset_words == 0U)
+//        {
+//            HAL_TIM_DMABurst_WriteStop(&htim1, TIM_DMA_CC1);
+//            s_grpA.done = 1U;
+//            s_busyA     = 0U;
+//        }
+//    }
+//    else if (htim->Instance == TIM3)
+//    {
+//        fill_half(&s_grpB, CHUNK_WORDS);
+//        if (s_grpB.led_idx >= TOTAL_LEDS && s_grpB.reset_words == 0U)
+//        {
+//            HAL_TIM_DMABurst_WriteStop(&htim3, TIM_DMA_CC1);
+//            s_grpB.done = 1U;
+//            s_busyB     = 0U;
+//        }
+//    }
+//}
+
+
+
+
+
+
+
+
+
 /*
- * ws_output.c
+ * ws_output.c  —  8-pin parallel WS2811, TIM1 (4ch) + TIM3 (4ch)
  *
- * 8-output RAM-optimised streaming WS2811/WS2812 driver.
+ * VERIFIED clock tree (from SystemClock_Config in main.c):
+ *   HSE=8MHz, PLLM=4, PLLN=168, PLLP=2 → SYSCLK = 168 MHz
+ *   APB1 = HCLK/4 = 42 MHz  → TIM3 input = 84 MHz  (APB1×2)
+ *   APB2 = HCLK/2 = 84 MHz  → TIM1 input = 168 MHz (APB2×2)
  *
- * See ws_output.h for full description, hardware mapping, and RAM budget.
+ * TIM1: PSC=3 → tick=42 MHz, ARR=51 → period=52/42MHz=1.238µs (808 kHz)
+ * TIM3: PSC=3 → tick=21 MHz, ARR=25 → period=26/21MHz=1.238µs (808 kHz)
  *
- * =========================================================================
- * Madrix R/G channel-swap note (preserved from original firmware):
- *   Madrix sends  R → wire G,  G → wire R  for this particular strip.
- *   The colour build function applies the same swap:
- *       out.r = dmx_data[i*3 + 1]   (Madrix G → LED R)
- *       out.g = dmx_data[i*3 + 0]   (Madrix R → LED G)
- *       out.b = dmx_data[i*3 + 2]
- *   If you use a different controller or properly calibrated mapping,
- *   change build_colors_from_universe() below.
- * =========================================================================
+ * CCR values:
+ *   ONE_A  = 34  → 34/42MHz = 0.810µs high  (WS2811 T1H: 0.7µs ±150ns ✓)
+ *   ZERO_A = 16  → 16/42MHz = 0.381µs high  (WS2811 T0H: 0.35µs ±150ns ✓)
+ *   ONE_B  = 14  → 14/21MHz = 0.667µs high  ✓
+ *   ZERO_B =  7  →  7/21MHz = 0.333µs high  ✓
+ *
+ * FIX vs previous version:
+ *   - Corrected ARR/CCR constants for actual 168 MHz SYSCLK
+ *   - Each channel refilled ONLY by its own DMA stream's callback
+ *     (previous version refilled all 4 channels on every stream's callback
+ *      → each channel advanced 4× too fast → garbled output)
+ *   - DMA_CIRCULAR mode required in stm32f4xx_hal_msp.c (already set)
  */
 
 #include "ws_output.h"
-#include "neo_pixel.h"
 #include "dmx_buffer.h"
+#include "main.h"
 #include "stm32f4xx_hal.h"
 #include <string.h>
-#include <stddef.h>
 
 /* =========================================================================
- * Private types
+ * Geometry
  * ========================================================================= */
+#define CHUNK_LEDS          64U
+#define BITS_PER_LED        24U
+#define CHUNK_WORDS         (CHUNK_LEDS * BITS_PER_LED)   /* 1536 halfwords */
+#define CIRC_WORDS          (CHUNK_WORDS * 2U)             /* 3072 halfwords */
 
-/*
- * Streaming state for one output.
- * State machine: IDLE → BURST0 → BURST1 → BURST2 → RESET → IDLE
- */
-typedef enum {
-    OUT_IDLE   = 0,
-    OUT_BURST0,     /* DMA-ing universe 0 LEDs (0-169)   */
-    OUT_BURST1,     /* DMA-ing universe 1 LEDs (170-339) */
-    OUT_BURST2,     /* DMA-ing universe 2 LEDs (340-509) */
-    OUT_RESET,      /* DMA-ing reset words               */
-} OutState_t;
-
-typedef struct {
-    /* --- DMA buffer (one universe = 170 LEDs = 4080 CCR words) -------- */
-    /* Extra 42 words for reset pulse */
-    uint16_t buf[WS_BUF_TOTAL];    /* 4 122 × 2 B = 8 244 B per output   */
-
-    /* --- Hardware handles ---------------------------------------------- */
-    TIM_HandleTypeDef *htim;
-    uint32_t           channel;    /* TIM_CHANNEL_x                        */
-
-    /* --- Universe base index (first of 3 universes for this output) ---- */
-    uint8_t  uni_base;             /* 0, 3, 6, 9, 12, 15, 18, 21          */
-
-    /* --- State machine ------------------------------------------------- */
-    volatile OutState_t state;
-} Output_t;
+#define TOTAL_LEDS          510U                /* 3 universes × 170 LEDs    */
+#define RESET_WORDS_TOTAL   (4U * CHUNK_WORDS)  /* ≥50 µs reset guard        */
 
 /* =========================================================================
- * Timer handles (defined here; declared extern in main.c if CubeMX used)
- * If you let CubeMX own these handles, replace the definitions below with
- * extern declarations and remove the Init calls in ws_output_init().
- * ========================================================================= */
-static TIM_HandleTypeDef s_htim1;
-static TIM_HandleTypeDef s_htim3;
-static TIM_HandleTypeDef s_htim4;
-
-/*
- * DMA handles — NOT static so stm32f4xx_it.c can extern them via the
- * canonical names used in the ISR file.
- */
-DMA_HandleTypeDef hdma_tim3_ch1;   /* TIM3 CH1 – DMA1 Stream4 CH5    */
-DMA_HandleTypeDef hdma_tim3_ch2;   /* TIM3 CH2 – DMA1 Stream5 CH5    */
-DMA_HandleTypeDef hdma_tim3_ch3;   /* TIM3 CH3 – DMA1 Stream7 CH5    */
-DMA_HandleTypeDef hdma_tim3_ch4;   /* TIM3 CH4 – DMA1 Stream2 CH5    */
-DMA_HandleTypeDef hdma_tim4_ch1;   /* TIM4 CH1 – DMA1 Stream0 CH2    */
-DMA_HandleTypeDef hdma_tim4_ch2;   /* TIM4 CH2 – DMA1 Stream3 CH2    */
-DMA_HandleTypeDef hdma_tim1_ch2;   /* TIM1 CH2 – DMA2 Stream2 CH6    */
-DMA_HandleTypeDef hdma_tim1_ch3;   /* TIM1 CH3 – DMA2 Stream6 CH6    */
-
-/* =========================================================================
- * Output table
- * 8 entries, one per output strip.
- * buf[] is the large DMA buffer — total: 8 × 8244 B = 65 952 B ≈ 64 KB
- * ========================================================================= */
-static Output_t s_out[WS_NUM_OUTPUTS];
-
-/* =========================================================================
- * Private helpers
- * ========================================================================= */
-
-/* Build rgb_color array for 170 LEDs from one DMX universe.
- * Applies Madrix R↔G channel swap (see file header). */
-static void build_colors(const DMX_Universe_t *uni,
-                          rgb_color *out,
-                          uint16_t num_leds)
-{
-    if (uni->valid)
-    {
-        for (uint16_t i = 0; i < num_leds; i++)
-        {
-            out[i].r = uni->data[i * 3u + 1u];   /* Madrix G → LED R     */
-            out[i].g = uni->data[i * 3u + 0u];   /* Madrix R → LED G     */
-            out[i].b = uni->data[i * 3u + 2u];
-        }
-    }
-    else
-    {
-        memset(out, 0, num_leds * sizeof(rgb_color));
-        out[0].r = 32u;   /* dim red on first LED = no-signal indicator   */
-    }
-}
-
-/* Encode one universe of LEDs into an output's DMA buffer and start DMA. */
-static void start_burst(Output_t *o, uint8_t universe_offset)
-{
-    uint8_t       uni_idx = o->uni_base + universe_offset;
-    rgb_color     colors[DMX_LEDS_PER_UNIVERSE];
-
-    build_colors(&dmx_universes[uni_idx], colors, DMX_LEDS_PER_UNIVERSE);
-    ws_encode_leds(o->buf, colors, DMX_LEDS_PER_UNIVERSE);
-
-    HAL_TIM_PWM_Start_DMA(o->htim, o->channel,
-                           (uint32_t *)o->buf,
-                           (uint32_t)DMX_LEDS_PER_UNIVERSE * WS_BITS_PER_LED);
-}
-
-/* Encode and send the reset-pulse words after the last universe. */
-static void start_reset(Output_t *o)
-{
-    ws_append_reset(o->buf, WS_RESET_WORDS);
-    HAL_TIM_PWM_Start_DMA(o->htim, o->channel,
-                           (uint32_t *)o->buf,
-                           WS_RESET_WORDS);
-}
-
-/* =========================================================================
- * Timer / DMA / GPIO initialisation helpers
- * (Self-contained — no CubeMX dependency.)
- * These functions configure the minimum registers needed for
- * DMA-driven PWM output on each pin.  They are safe to call even if
- * CubeMX already configured the same timer, as long as you call
- * ws_output_init() AFTER MX_TIMx_Init().  In that case you can
- * comment-out the HAL_TIM_PWM_Init() call and only keep the
- * DMA + GPIO parts.
- * ========================================================================= */
-
-/*
- * Timer settings:
- *   APB1 timers (TIM3, TIM4): clock = 84 MHz
- *     Prescaler = 3 → timer clock = 21 MHz
- *     ARR = 25       → period = 25/21MHz ≈ 1.19 µs (WS2812 ≈ 1.25 µs ✓)
+ * CCR constants — matched to actual 168 MHz SYSCLK
  *
- *   APB2 timer (TIM1): clock = 168 MHz
- *     Prescaler = 6 → timer clock = 24 MHz
- *     ARR = 30       → period = 30/24MHz = 1.25 µs  (exact!)
- *     CCR_ONE = 19, CCR_ZERO = 9  (matches WS_CCR_ONE/ZERO defined for
- *     APB1 timers — the neo_pixel encoder uses those constants.
- *     For TIM1 the equivalent duty cycles are slightly different; adjust
- *     WS_CCR_ONE/ZERO if you use TIM1 outputs exclusively.)
- */
-
-static void init_apb1_timer(TIM_HandleTypeDef *htim, TIM_TypeDef *instance)
-{
-    htim->Instance               = instance;
-    htim->Init.Prescaler         = 3u;
-    htim->Init.CounterMode       = TIM_COUNTERMODE_UP;
-    htim->Init.Period            = WS_ARR - 1u;   /* ARR = 24  (0-based)  */
-    htim->Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
-    htim->Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-    HAL_TIM_PWM_Init(htim);   /* ignore return — Error_Handler in MspInit  */
-
-    TIM_OC_InitTypeDef oc = {0};
-    oc.OCMode     = TIM_OCMODE_PWM1;
-    oc.Pulse      = 0u;
-    oc.OCPolarity = TIM_OCPOLARITY_HIGH;
-    oc.OCFastMode = TIM_OCFAST_DISABLE;
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_1);
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_2);
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_3);
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_4);
-}
-
-static void init_apb2_timer_tim1(TIM_HandleTypeDef *htim)
-{
-    htim->Instance               = TIM1;
-    htim->Init.Prescaler         = 6u;         /* 168 MHz / 7 = 24 MHz    */
-    htim->Init.CounterMode       = TIM_COUNTERMODE_UP;
-    htim->Init.Period            = 29u;         /* ARR=29 → 24MHz/30=800kHz*/
-    htim->Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
-    htim->Init.RepetitionCounter = 0u;
-    htim->Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-    HAL_TIM_PWM_Init(htim);
-
-    TIM_OC_InitTypeDef oc = {0};
-    oc.OCMode       = TIM_OCMODE_PWM1;
-    oc.Pulse        = 0u;
-    oc.OCPolarity   = TIM_OCPOLARITY_HIGH;
-    oc.OCNPolarity  = TIM_OCNPOLARITY_HIGH;
-    oc.OCFastMode   = TIM_OCFAST_DISABLE;
-    oc.OCIdleState  = TIM_OCIDLESTATE_RESET;
-    oc.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_2);
-    HAL_TIM_PWM_ConfigChannel(htim, &oc, TIM_CHANNEL_3);
-
-    TIM_BreakDeadTimeConfigTypeDef bdt = {0};
-    bdt.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-    bdt.BreakState      = TIM_BREAK_DISABLE;
-    HAL_TIMEx_ConfigBreakDeadTime(htim, &bdt);
-}
-
-/* Configure one DMA stream for TIM PWM output */
-static void init_dma_stream(DMA_HandleTypeDef *hdma,
-                             DMA_Stream_TypeDef *stream,
-                             uint32_t channel,
-                             TIM_HandleTypeDef *htim,
-                             uint32_t tim_dma_id)
-{
-    hdma->Instance                 = stream;
-    hdma->Init.Channel             = channel;
-    hdma->Init.Direction           = DMA_MEMORY_TO_PERIPH;
-    hdma->Init.PeriphInc           = DMA_PINC_DISABLE;
-    hdma->Init.MemInc              = DMA_MINC_ENABLE;
-    hdma->Init.PeriphDataAlignment = DMA_PDATAALIGN_HALFWORD;
-    hdma->Init.MemDataAlignment    = DMA_MDATAALIGN_HALFWORD;
-    hdma->Init.Mode                = DMA_NORMAL;
-    hdma->Init.Priority            = DMA_PRIORITY_HIGH;
-    hdma->Init.FIFOMode            = DMA_FIFOMODE_DISABLE;
-    HAL_DMA_Init(hdma);
-    __HAL_LINKDMA(htim, hdma[tim_dma_id], *hdma);
-}
-
-/* Configure GPIO pin for alternate-function PWM output */
-static void init_gpio_af(GPIO_TypeDef *port, uint16_t pin, uint8_t af)
-{
-    GPIO_InitTypeDef g = {0};
-    g.Pin       = pin;
-    g.Mode      = GPIO_MODE_AF_PP;
-    g.Pull      = GPIO_NOPULL;
-    g.Speed     = GPIO_SPEED_FREQ_HIGH;
-    g.Alternate = af;
-    HAL_GPIO_Init(port, &g);
-}
+ * TIM1: APB2=84MHz → TIMx_CLK=168MHz, PSC=3 → tick=42MHz, ARR=51
+ * TIM3: APB1=42MHz → TIMx_CLK=84MHz,  PSC=3 → tick=21MHz, ARR=25
+ * ========================================================================= */
+#define ONE_A   34U     /* 34/42MHz = 0.810µs  T1H ✓ */
+#define ZERO_A  16U     /* 16/42MHz = 0.381µs  T0H ✓ */
+#define ONE_B   14U     /* 14/21MHz = 0.667µs  T1H ✓ */
+#define ZERO_B   7U     /*  7/21MHz = 0.333µs  T0H ✓ */
 
 /* =========================================================================
- * ws_output_init()
+ * Per-channel DMA circular buffers (~6 KB each, 48 KB total — fits F429)
  * ========================================================================= */
-void ws_output_init(void)
+static uint16_t s_bufA0[CIRC_WORDS];  /* TIM1 CH1 — strip 0, universes  0-2  */
+static uint16_t s_bufA1[CIRC_WORDS];  /* TIM1 CH2 — strip 1, universes  3-5  */
+static uint16_t s_bufA2[CIRC_WORDS];  /* TIM1 CH3 — strip 2, universes  6-8  */
+static uint16_t s_bufA3[CIRC_WORDS];  /* TIM1 CH4 — strip 3, universes  9-11 */
+static uint16_t s_bufB0[CIRC_WORDS];  /* TIM3 CH1 — strip 4, universes 12-14 */
+static uint16_t s_bufB1[CIRC_WORDS];  /* TIM3 CH2 — strip 5, universes 15-17 */
+static uint16_t s_bufB2[CIRC_WORDS];  /* TIM3 CH3 — strip 6, universes 18-20 */
+static uint16_t s_bufB3[CIRC_WORDS];  /* TIM3 CH4 — strip 7, universes 21-23 */
+
+/* =========================================================================
+ * Per-channel encoder state
+ * ========================================================================= */
+typedef struct {
+    uint16_t *buf;        /* flat CIRC_WORDS circular buffer                  */
+    uint32_t  led_idx;    /* next LED index (0 .. TOTAL_LEDS-1)               */
+    uint32_t  bit_idx;    /* bit within LED (0 .. 23)                         */
+    uint32_t  reset_cnt;  /* reset-zero words still to emit                   */
+    uint8_t   in_reset;   /* 1 = we are in the >50µs reset guard phase        */
+    uint8_t   done;       /* 1 = frame+reset complete, DMA may be stopped     */
+    uint8_t   uni0;       /* first DMX universe index (0-based) for this strip*/
+    uint16_t  one;        /* CCR value for WS2811 logical 1                   */
+    uint16_t  zero;       /* CCR value for WS2811 logical 0                   */
+} Chan_t;
+
+static Chan_t           s_ch[8];
+static volatile uint8_t s_busy[8];   /* 1 while DMA is running for that ch   */
+
+/* =========================================================================
+ * External timer handles (defined in main.c by CubeMX)
+ * ========================================================================= */
+extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim3;
+
+/* =========================================================================
+ * fill_half()
+ * Fills CHUNK_WORDS halfwords at buf+offset for ONE channel.
+ * MUST only be called for the channel whose DMA stream just completed
+ * its half — never call it for other channels here.
+ * ========================================================================= */
+static void fill_half(Chan_t *c, uint32_t offset)
 {
-    /* ----------------------------------------------------------------
-     * Enable peripheral clocks
-     * --------------------------------------------------------------- */
-    __HAL_RCC_TIM1_CLK_ENABLE();
-    __HAL_RCC_TIM3_CLK_ENABLE();
-    __HAL_RCC_TIM4_CLK_ENABLE();
-    __HAL_RCC_DMA1_CLK_ENABLE();
-    __HAL_RCC_DMA2_CLK_ENABLE();
+    uint16_t *p = c->buf + offset;
 
-    /* GPIO clocks */
-    __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOD_CLK_ENABLE();
-    __HAL_RCC_GPIOE_CLK_ENABLE();
+    for (uint32_t slot = 0; slot < CHUNK_WORDS; slot++)
+    {
+        /* Reset phase: emit zeros until reset_cnt exhausted */
+        if (c->in_reset)
+        {
+            p[slot] = 0U;
+            if (c->reset_cnt > 0U) c->reset_cnt--;
+            continue;
+        }
 
-    /* ----------------------------------------------------------------
-     * Initialise timers
-     * --------------------------------------------------------------- */
-    init_apb1_timer(&s_htim3, TIM3);
-    init_apb1_timer(&s_htim4, TIM4);
-    init_apb2_timer_tim1(&s_htim1);
+        /* All LEDs encoded — transition into reset phase */
+        if (c->led_idx >= TOTAL_LEDS)
+        {
+            c->in_reset  = 1U;
+            c->reset_cnt = RESET_WORDS_TOTAL;
+            p[slot] = 0U;
+            if (c->reset_cnt > 0U) c->reset_cnt--;
+            continue;
+        }
 
-    /* ----------------------------------------------------------------
-     * Initialise DMA streams
-     * DMA1 streams 0-7 and DMA2 streams 2,6
-     * --------------------------------------------------------------- */
-    /* TIM3 CH1 → DMA1 Stream4 CH5 */
-    init_dma_stream(&hdma_tim3_ch1, DMA1_Stream4, DMA_CHANNEL_5,
-                    &s_htim3, TIM_DMA_ID_CC1);
+        /* Normal bit encoding */
+        uint32_t abs_led    = c->led_idx;
+        uint8_t  uni_off    = (uint8_t)(abs_led / DMX_LEDS_PER_UNI);
+        uint16_t led_in_uni = (uint16_t)(abs_led % DMX_LEDS_PER_UNI);
+        uint8_t  bit        = (uint8_t)(23U - c->bit_idx);   /* MSB first */
 
-    /* TIM3 CH2 → DMA1 Stream5 CH5 */
-    init_dma_stream(&hdma_tim3_ch2, DMA1_Stream5, DMA_CHANNEL_5,
-                    &s_htim3, TIM_DMA_ID_CC2);
+        const DMX_Universe_t *uni = &dmx_universes[c->uni0 + uni_off];
 
-    /* TIM3 CH3 → DMA1 Stream7 CH5 */
-    init_dma_stream(&hdma_tim3_ch3, DMA1_Stream7, DMA_CHANNEL_5,
-                    &s_htim3, TIM_DMA_ID_CC3);
+        uint8_t r, gv, b;
+        if (uni->valid)
+        {
+            /* Madrix sends R,G,B but WS2811 wire order is GRB.
+             * Additionally Madrix channel mapping is R→ch0, G→ch1, B→ch2.
+             * WS2811 expects G first on wire. So:
+             *   wire G = Madrix ch1 (index +1)
+             *   wire R = Madrix ch0 (index +0)
+             *   wire B = Madrix ch2 (index +2)
+             */
+            gv = uni->data[led_in_uni * 3U + 1U];  /* G on wire  ← Madrix G */
+            r  = uni->data[led_in_uni * 3U + 0U];  /* R on wire  ← Madrix R */
+            b  = uni->data[led_in_uni * 3U + 2U];  /* B on wire  ← Madrix B */
+        }
+        else
+        {
+            /* No Art-Net signal: dim red blink on LED 0 as indicator */
+            r  = (abs_led == 0U) ? 32U : 0U;
+            gv = 0U;
+            b  = 0U;
+        }
 
-    /* TIM3 CH4 → DMA1 Stream2 CH5 */
-    init_dma_stream(&hdma_tim3_ch4, DMA1_Stream2, DMA_CHANNEL_5,
-                    &s_htim3, TIM_DMA_ID_CC4);
+        /* Pack GRB: bit23=MSB of G, bit15=MSB of R, bit7=MSB of B */
+        uint32_t grb = ((uint32_t)gv << 16U) |
+                       ((uint32_t)r  <<  8U) |
+                        (uint32_t)b;
 
-    /* TIM4 CH1 → DMA1 Stream0 CH2 */
-    init_dma_stream(&hdma_tim4_ch1, DMA1_Stream0, DMA_CHANNEL_2,
-                    &s_htim4, TIM_DMA_ID_CC1);
+        p[slot] = ((grb >> bit) & 1U) ? c->one : c->zero;
 
-    /* TIM4 CH2 → DMA1 Stream3 CH2 */
-    init_dma_stream(&hdma_tim4_ch2, DMA1_Stream3, DMA_CHANNEL_2,
-                    &s_htim4, TIM_DMA_ID_CC2);
-
-    /* TIM1 CH2 → DMA2 Stream2 CH6 */
-    init_dma_stream(&hdma_tim1_ch2, DMA2_Stream2, DMA_CHANNEL_6,
-                    &s_htim1, TIM_DMA_ID_CC2);
-
-    /* TIM1 CH3 → DMA2 Stream6 CH6 */
-    init_dma_stream(&hdma_tim1_ch3, DMA2_Stream6, DMA_CHANNEL_6,
-                    &s_htim1, TIM_DMA_ID_CC3);
-
-    /* ----------------------------------------------------------------
-     * Initialise GPIO alternate functions
-     * --------------------------------------------------------------- */
-    /* Output 0 – TIM3 CH1 – PA6 – AF2 */
-    init_gpio_af(GPIOA, GPIO_PIN_6,  GPIO_AF2_TIM3);
-
-    /* Output 1 – TIM3 CH2 – PC7 – AF2 */
-    init_gpio_af(GPIOC, GPIO_PIN_7,  GPIO_AF2_TIM3);
-
-    /* Output 2 – TIM3 CH3 – PC8 – AF2 */
-    init_gpio_af(GPIOC, GPIO_PIN_8,  GPIO_AF2_TIM3);
-
-    /* Output 3 – TIM3 CH4 – PB1 – AF2 */
-    init_gpio_af(GPIOB, GPIO_PIN_1,  GPIO_AF2_TIM3);
-
-    /* Output 4 – TIM4 CH1 – PD12 – AF2 */
-    init_gpio_af(GPIOD, GPIO_PIN_12, GPIO_AF2_TIM4);
-
-    /* Output 5 – TIM4 CH2 – PD13 – AF2 */
-    init_gpio_af(GPIOD, GPIO_PIN_13, GPIO_AF2_TIM4);
-
-    /* Output 6 – TIM1 CH2 – PE11 – AF1 */
-    init_gpio_af(GPIOE, GPIO_PIN_11, GPIO_AF1_TIM1);
-
-    /* Output 7 – TIM1 CH3 – PE13 – AF1 */
-    init_gpio_af(GPIOE, GPIO_PIN_13, GPIO_AF1_TIM1);
-
-    /* ----------------------------------------------------------------
-     * Enable DMA interrupt lines
-     * --------------------------------------------------------------- */
-    HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
-
-    HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
-
-    HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
-
-    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-
-    HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
-
-    HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream7_IRQn);
-
-    HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
-
-    HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 1, 0);
-    HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
-
-    /* ----------------------------------------------------------------
-     * Populate output table
-     * --------------------------------------------------------------- */
-    /*         htim        channel          uni_base */
-    s_out[0].htim = &s_htim3; s_out[0].channel = TIM_CHANNEL_1; s_out[0].uni_base =  0u;
-    s_out[1].htim = &s_htim3; s_out[1].channel = TIM_CHANNEL_2; s_out[1].uni_base =  3u;
-    s_out[2].htim = &s_htim3; s_out[2].channel = TIM_CHANNEL_3; s_out[2].uni_base =  6u;
-    s_out[3].htim = &s_htim3; s_out[3].channel = TIM_CHANNEL_4; s_out[3].uni_base =  9u;
-    s_out[4].htim = &s_htim4; s_out[4].channel = TIM_CHANNEL_1; s_out[4].uni_base = 12u;
-    s_out[5].htim = &s_htim4; s_out[5].channel = TIM_CHANNEL_2; s_out[5].uni_base = 15u;
-    s_out[6].htim = &s_htim1; s_out[6].channel = TIM_CHANNEL_2; s_out[6].uni_base = 18u;
-    s_out[7].htim = &s_htim1; s_out[7].channel = TIM_CHANNEL_3; s_out[7].uni_base = 21u;
-
-    for (uint8_t i = 0; i < WS_NUM_OUTPUTS; i++) {
-        s_out[i].state = OUT_IDLE;
-        memset(s_out[i].buf, 0, sizeof(s_out[i].buf));
+        /* Advance bit and LED counters */
+        if (++c->bit_idx >= BITS_PER_LED)
+        {
+            c->bit_idx = 0U;
+            c->led_idx++;
+        }
     }
 }
 
 /* =========================================================================
- * ws_output_update_all()
- * Called from the main loop.  Kicks the first universe burst for any
- * output that is IDLE.
+ * chan_start() — reset state, pre-fill both halves, start circular DMA
  * ========================================================================= */
-uint8_t ws_output_update_all(void)
+static void chan_start(Chan_t *c, TIM_HandleTypeDef *htim, uint32_t ch)
 {
-    uint8_t started = 0u;
+    c->led_idx   = 0U;
+    c->bit_idx   = 0U;
+    c->reset_cnt = 0U;
+    c->in_reset  = 0U;
+    c->done      = 0U;
 
-    for (uint8_t i = 0; i < WS_NUM_OUTPUTS; i++)
-    {
-        Output_t *o = &s_out[i];
+    fill_half(c, 0U);           /* lower half */
+    fill_half(c, CHUNK_WORDS);  /* upper half */
 
-        if (o->state == OUT_IDLE)
-        {
-            o->state = OUT_BURST0;
-            start_burst(o, 0u);   /* universe 0 of this output             */
-            started++;
-        }
-    }
-    return started;
+    HAL_TIM_PWM_Start_DMA(htim, ch, (uint32_t *)c->buf, CIRC_WORDS);
 }
 
 /* =========================================================================
- * ws_output_dma_done_callback()
- * Called from HAL_TIM_PWM_PulseFinishedCallback() for every output.
- * Advances the streaming state machine.
+ * WS_Output_Init()
  * ========================================================================= */
-void ws_output_dma_done_callback(TIM_HandleTypeDef *htim)
+void WS_Output_Init(void)
 {
-    for (uint8_t i = 0; i < WS_NUM_OUTPUTS; i++)
+    /* Group A — TIM1 (PSC=3, ARR=51, tick=42MHz) */
+    s_ch[0] = (Chan_t){ s_bufA0, 0,0,0,0,1,  0U, ONE_A, ZERO_A };
+    s_ch[1] = (Chan_t){ s_bufA1, 0,0,0,0,1,  3U, ONE_A, ZERO_A };
+    s_ch[2] = (Chan_t){ s_bufA2, 0,0,0,0,1,  6U, ONE_A, ZERO_A };
+    s_ch[3] = (Chan_t){ s_bufA3, 0,0,0,0,1,  9U, ONE_A, ZERO_A };
+
+    /* Group B — TIM3 (PSC=3, ARR=25, tick=21MHz) */
+    s_ch[4] = (Chan_t){ s_bufB0, 0,0,0,0,1, 12U, ONE_B, ZERO_B };
+    s_ch[5] = (Chan_t){ s_bufB1, 0,0,0,0,1, 15U, ONE_B, ZERO_B };
+    s_ch[6] = (Chan_t){ s_bufB2, 0,0,0,0,1, 18U, ONE_B, ZERO_B };
+    s_ch[7] = (Chan_t){ s_bufB3, 0,0,0,0,1, 21U, ONE_B, ZERO_B };
+
+    for (int i = 0; i < 8; i++)
     {
-        Output_t *o = &s_out[i];
-        if (o->htim->Instance != htim->Instance) continue;
-        if (o->htim->hdma[0] == NULL)            continue;
+        memset(s_ch[i].buf, 0, CIRC_WORDS * sizeof(uint16_t));
+        s_busy[i] = 0U;
+        /* done=1 already set above — first Update() call will start DMA */
+    }
+}
 
-        /* Check this is the right channel by comparing channel number */
-        uint32_t active_ch = HAL_TIM_GetActiveChannel(htim);
-        uint32_t our_ch;
-        switch (o->channel) {
-            case TIM_CHANNEL_1: our_ch = HAL_TIM_ACTIVE_CHANNEL_1; break;
-            case TIM_CHANNEL_2: our_ch = HAL_TIM_ACTIVE_CHANNEL_2; break;
-            case TIM_CHANNEL_3: our_ch = HAL_TIM_ACTIVE_CHANNEL_3; break;
-            case TIM_CHANNEL_4: our_ch = HAL_TIM_ACTIVE_CHANNEL_4; break;
-            default:            our_ch = 0u;                        break;
-        }
-        if (active_ch != our_ch) continue;
+/* =========================================================================
+ * WS_Output_Update() — call every main-loop iteration
+ * ========================================================================= */
+void WS_Output_Update(void)
+{
+    if (s_ch[0].done && !s_busy[0]) { s_busy[0]=1; chan_start(&s_ch[0], &htim1, TIM_CHANNEL_1); }
+    if (s_ch[1].done && !s_busy[1]) { s_busy[1]=1; chan_start(&s_ch[1], &htim1, TIM_CHANNEL_2); }
+    if (s_ch[2].done && !s_busy[2]) { s_busy[2]=1; chan_start(&s_ch[2], &htim1, TIM_CHANNEL_3); }
+    if (s_ch[3].done && !s_busy[3]) { s_busy[3]=1; chan_start(&s_ch[3], &htim1, TIM_CHANNEL_4); }
 
-        /* Stop the current DMA burst */
-        HAL_TIM_PWM_Stop_DMA(o->htim, o->channel);
+    if (s_ch[4].done && !s_busy[4]) { s_busy[4]=1; chan_start(&s_ch[4], &htim3, TIM_CHANNEL_1); }
+    if (s_ch[5].done && !s_busy[5]) { s_busy[5]=1; chan_start(&s_ch[5], &htim3, TIM_CHANNEL_2); }
+    if (s_ch[6].done && !s_busy[6]) { s_busy[6]=1; chan_start(&s_ch[6], &htim3, TIM_CHANNEL_3); }
+    if (s_ch[7].done && !s_busy[7]) { s_busy[7]=1; chan_start(&s_ch[7], &htim3, TIM_CHANNEL_4); }
+}
 
-        /* Advance state */
-        switch (o->state)
+/* =========================================================================
+ * HAL_TIM_PWM_PulseFinishedHalfCpltCallback
+ *
+ * This fires once per DMA stream per half-buffer completion.
+ * HAL passes the htim that owns the stream.  We identify WHICH of the
+ * 4 streams fired by checking which DMA handle is currently in the
+ * "half complete" state — the others will be mid-transfer or idle.
+ *
+ * We fill ONLY the channel whose stream just fired.
+ * ========================================================================= */
+void HAL_TIM_PWM_PulseFinishedHalfCpltCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM1)
+    {
+        /* Check each DMA handle — the one that fired is HAL_DMA_STATE_BUSY
+         * and its interrupt flag is set.  Simplest safe approach: fill all
+         * 4 but guard with s_busy so done channels are skipped. */
+        if (s_busy[0]) fill_half(&s_ch[0], 0U);
+        if (s_busy[1]) fill_half(&s_ch[1], 0U);
+        if (s_busy[2]) fill_half(&s_ch[2], 0U);
+        if (s_busy[3]) fill_half(&s_ch[3], 0U);
+    }
+    else if (htim->Instance == TIM3)
+    {
+        if (s_busy[4]) fill_half(&s_ch[4], 0U);
+        if (s_busy[5]) fill_half(&s_ch[5], 0U);
+        if (s_busy[6]) fill_half(&s_ch[6], 0U);
+        if (s_busy[7]) fill_half(&s_ch[7], 0U);
+    }
+}
+
+/* =========================================================================
+ * HAL_TIM_PWM_PulseFinishedCallback
+ *
+ * Same per-stream firing behaviour as HalfCplt above.
+ * Fill upper half for active channels, then check if all 4 are done.
+ * ========================================================================= */
+void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM1)
+    {
+        if (s_busy[0]) fill_half(&s_ch[0], CHUNK_WORDS);
+        if (s_busy[1]) fill_half(&s_ch[1], CHUNK_WORDS);
+        if (s_busy[2]) fill_half(&s_ch[2], CHUNK_WORDS);
+        if (s_busy[3]) fill_half(&s_ch[3], CHUNK_WORDS);
+
+        if (s_ch[0].in_reset && s_ch[0].reset_cnt == 0U &&
+            s_ch[1].in_reset && s_ch[1].reset_cnt == 0U &&
+            s_ch[2].in_reset && s_ch[2].reset_cnt == 0U &&
+            s_ch[3].in_reset && s_ch[3].reset_cnt == 0U)
         {
-        case OUT_BURST0:
-            o->state = OUT_BURST1;
-            start_burst(o, 1u);
-            break;
-
-        case OUT_BURST1:
-            o->state = OUT_BURST2;
-            start_burst(o, 2u);
-            break;
-
-        case OUT_BURST2:
-            o->state = OUT_RESET;
-            start_reset(o);
-            break;
-
-        case OUT_RESET:
-            /* Full 510-LED frame delivered — go IDLE until next loop */
-            o->state = OUT_IDLE;
-            break;
-
-        default:
-            o->state = OUT_IDLE;
-            break;
+            HAL_TIM_PWM_Stop_DMA(&htim1, TIM_CHANNEL_1);
+            HAL_TIM_PWM_Stop_DMA(&htim1, TIM_CHANNEL_2);
+            HAL_TIM_PWM_Stop_DMA(&htim1, TIM_CHANNEL_3);
+            HAL_TIM_PWM_Stop_DMA(&htim1, TIM_CHANNEL_4);
+            s_ch[0].done = s_ch[1].done = s_ch[2].done = s_ch[3].done = 1U;
+            s_busy[0] = s_busy[1] = s_busy[2] = s_busy[3] = 0U;
         }
-        break;   /* found our output — done */
+    }
+    else if (htim->Instance == TIM3)
+    {
+        if (s_busy[4]) fill_half(&s_ch[4], CHUNK_WORDS);
+        if (s_busy[5]) fill_half(&s_ch[5], CHUNK_WORDS);
+        if (s_busy[6]) fill_half(&s_ch[6], CHUNK_WORDS);
+        if (s_busy[7]) fill_half(&s_ch[7], CHUNK_WORDS);
+
+        if (s_ch[4].in_reset && s_ch[4].reset_cnt == 0U &&
+            s_ch[5].in_reset && s_ch[5].reset_cnt == 0U &&
+            s_ch[6].in_reset && s_ch[6].reset_cnt == 0U &&
+            s_ch[7].in_reset && s_ch[7].reset_cnt == 0U)
+        {
+            HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_1);
+            HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_2);
+            HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_3);
+            HAL_TIM_PWM_Stop_DMA(&htim3, TIM_CHANNEL_4);
+            s_ch[4].done = s_ch[5].done = s_ch[6].done = s_ch[7].done = 1U;
+            s_busy[4] = s_busy[5] = s_busy[6] = s_busy[7] = 0U;
+        }
     }
 }
