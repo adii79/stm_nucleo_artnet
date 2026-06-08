@@ -98,7 +98,8 @@
 /*-----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
 // Heap — needs room for pbuf pools + Art-Net reply buffers
-#define MEM_SIZE                (10 * 1024)
+//#define MEM_SIZE                (10 * 1024)
+#define MEM_SIZE                (8 * 1024)
 
 // pbuf pool — each slot holds one Ethernet frame
 #define PBUF_POOL_SIZE          12

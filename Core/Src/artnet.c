@@ -219,6 +219,66 @@ void artnet_receive(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     /* ------------------------------------------------------------------
      * ArtDMX
      * ------------------------------------------------------------------ */
+//    case OP_DMX:
+//    {
+//        if (p->tot_len < 18) break;
+//
+//        uint16_t ver = (uint16_t)((raw[10] << 8) | raw[11]);
+//        if (ver < 14) break;
+//
+//        artnet_rx_dmx++;
+//
+//        ArtNet_OpDmx_t *dmx = (ArtNet_OpDmx_t *)(raw + 12);
+//
+//        uint16_t universe = dmx->universe;
+//
+//        uint16_t length = (uint16_t)((dmx->length_hi << 8) | dmx->length_lo);
+//        if (length == 0)  length = 512;
+//        if (length > 512) length = 512;
+//        if (length & 1)   length++;
+//
+//        if (universe < DMX_UNIVERSE_COUNT)
+//        {
+//            DMX_Universe_t *uni = &dmx_universes[universe];
+//
+//            memcpy(uni->data, dmx->data, length);
+//            uni->length         = length;
+//            uni->last_update_ms = HAL_GetTick();
+//            uni->valid          = true;
+//            uni->packet_count++;
+//
+//            if (universe == 0) {
+//                memcpy(artnet_uni1.data, dmx->data, length);
+//                artnet_uni1.length         = length;
+//                artnet_uni1.last_update_ms = uni->last_update_ms;
+//                artnet_uni1.valid          = true;
+//                artnet_uni1.packet_count   = uni->packet_count;
+//            } else if (universe == 1) {
+//                memcpy(artnet_uni2.data, dmx->data, length);
+//                artnet_uni2.length         = length;
+//                artnet_uni2.last_update_ms = uni->last_update_ms;
+//                artnet_uni2.valid          = true;
+//                artnet_uni2.packet_count   = uni->packet_count;
+//            }
+//
+//            printf("UNI:%d CNT:%lu CH1:%3d CH2:%3d CH3:%3d CH4:%3d CH5:%3d\r\n",
+//                   universe,
+//                   (unsigned long)uni->packet_count,
+//                   uni->data[0], uni->data[1], uni->data[2],
+//                   uni->data[3], uni->data[4]);
+//        }
+//        break;
+//    }
+//
+//    case OP_SYNC:
+//        break;
+//
+//    default:
+//        artnet_rx_unknown++;
+//        break;
+//    }
+//}
+
     case OP_DMX:
     {
         if (p->tot_len < 18) break;
@@ -237,47 +297,20 @@ void artnet_receive(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         if (length > 512) length = 512;
         if (length & 1)   length++;
 
-        if (universe < DMX_UNIVERSE_COUNT)
-        {
+        if (universe < DMX_UNIVERSE_COUNT) {
             DMX_Universe_t *uni = &dmx_universes[universe];
-
             memcpy(uni->data, dmx->data, length);
             uni->length         = length;
             uni->last_update_ms = HAL_GetTick();
             uni->valid          = true;
             uni->packet_count++;
-
-            if (universe == 0) {
-                memcpy(artnet_uni1.data, dmx->data, length);
-                artnet_uni1.length         = length;
-                artnet_uni1.last_update_ms = uni->last_update_ms;
-                artnet_uni1.valid          = true;
-                artnet_uni1.packet_count   = uni->packet_count;
-            } else if (universe == 1) {
-                memcpy(artnet_uni2.data, dmx->data, length);
-                artnet_uni2.length         = length;
-                artnet_uni2.last_update_ms = uni->last_update_ms;
-                artnet_uni2.valid          = true;
-                artnet_uni2.packet_count   = uni->packet_count;
-            }
-
-            printf("UNI:%d CNT:%lu CH1:%3d CH2:%3d CH3:%3d CH4:%3d CH5:%3d\r\n",
-                   universe,
-                   (unsigned long)uni->packet_count,
-                   uni->data[0], uni->data[1], uni->data[2],
-                   uni->data[3], uni->data[4]);
         }
         break;
     }
 
-    case OP_SYNC:
-        break;
-
-    default:
-        artnet_rx_unknown++;
-        break;
     }
 }
+
 
 /* =========================================================================
  * send_poll_reply()

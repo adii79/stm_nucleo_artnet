@@ -36,17 +36,55 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-//#define NUMBER_OF_LEDS  12
-#define NUMBER_OF_LEDS  50
+////#define NUMBER_OF_LEDS  12
+//#define NUMBER_OF_LEDS  170
+//
+////neopixel_led leds1[NUMBER_OF_LEDS + 1];   // Strip 0 → TIM3 CH1 (PC6)
+////neopixel_led leds2[NUMBER_OF_LEDS + 1];   // Strip 1 → TIM4 CH1 (PB6)
+//
+//neopixel_led leds[8][NUMBER_OF_LEDS + 1];
+//
+////static rgb_color dmx_colors1[NUMBER_OF_LEDS];
+////static rgb_color dmx_colors2[NUMBER_OF_LEDS];
+//
+//static rgb_color dmx_colors[8][NUMBER_OF_LEDS];
+//
+////static volatile uint8_t dma_busy1 = 0;
+////static volatile uint8_t dma_busy2 = 0;
+//
+//static volatile uint8_t dma_busy[8] = {0};
 
-neopixel_led leds1[NUMBER_OF_LEDS + 1];   // Strip 0 → TIM3 CH1 (PC6)
-neopixel_led leds2[NUMBER_OF_LEDS + 1];   // Strip 1 → TIM4 CH1 (PB6)
 
-static rgb_color dmx_colors1[NUMBER_OF_LEDS];
-static rgb_color dmx_colors2[NUMBER_OF_LEDS];
+//#define LEDS_PER_UNIVERSE   170   // 170 × 3 = 510 channels
+//#define UNIVERSES_PER_PIN   3
+//#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)  // 510
+//
+//#define NUM_PINS            6
+//
+//// 6 strips, each holds 510 LEDs + 1 reset slot
+//neopixel_led leds[NUM_PINS][LEDS_PER_PIN + 1];
+//
+//// Color staging buffers, one per pin (3 universes concatenated)
+////static rgb_color dmx_colors[NUM_PINS][LEDS_PER_PIN];
+//static rgb_color dmx_colors[NUM_PINS][LEDS_PER_PIN] __attribute__((section(".ccmram")));
+//static volatile uint8_t dma_busy[NUM_PINS];
 
-static volatile uint8_t dma_busy1 = 0;
-static volatile uint8_t dma_busy2 = 0;
+
+#define LEDS_PER_UNIVERSE   170
+#define UNIVERSES_PER_PIN   3
+#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)
+#define NUM_PINS            6
+
+/* DMA reads this directly — MUST stay in main SRAM, never move to CCM */
+neopixel_led leds[NUM_PINS][LEDS_PER_PIN + 1];
+
+/* CPU-only buffers — placed in CCM to free up SRAM */
+static rgb_color dmx_colors[NUM_PINS][LEDS_PER_PIN] __attribute__((section(".ccmram")));
+
+static volatile uint8_t dma_busy[NUM_PINS];
+
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,14 +98,9 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
-TIM_HandleTypeDef htim6;
-TIM_HandleTypeDef htim9;
-TIM_HandleTypeDef htim12;
 DMA_HandleTypeDef hdma_tim1_ch1;
-DMA_HandleTypeDef hdma_tim1_ch2;
-DMA_HandleTypeDef hdma_tim1_ch3;
 DMA_HandleTypeDef hdma_tim1_ch4_trig_com;
-DMA_HandleTypeDef hdma_tim2_ch2_ch4;
+DMA_HandleTypeDef hdma_tim1_up;
 DMA_HandleTypeDef hdma_tim2_up_ch3;
 DMA_HandleTypeDef hdma_tim3_ch1_trig;
 DMA_HandleTypeDef hdma_tim3_ch2;
@@ -75,6 +108,7 @@ DMA_HandleTypeDef hdma_tim3_ch3;
 DMA_HandleTypeDef hdma_tim3_ch4_up;
 DMA_HandleTypeDef hdma_tim4_ch1;
 DMA_HandleTypeDef hdma_tim4_ch2;
+DMA_HandleTypeDef hdma_tim4_up;
 
 UART_HandleTypeDef huart3;
 
@@ -90,16 +124,13 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_TIM6_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
-static void MX_TIM2_Init(void);
-static void MX_TIM1_Init(void);
 static void MX_TIM5_Init(void);
-static void MX_TIM9_Init(void);
-static void MX_TIM12_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -131,21 +162,85 @@ static void MX_TIM12_Init(void);
 //    }
 //}
 
+//static void build_colors_from_universe(const DMX_Universe_t *uni,
+//                                       rgb_color *out,
+//                                       uint16_t num_leds)
+//{
+//    if (uni->valid) {
+//        for (uint16_t i = 0; i < num_leds; i++) {
+//        	out[i].r = uni->data[i * 3 + 1];  // Madrix G → LED R wire
+//        	out[i].g = uni->data[i * 3 + 0];  // Madrix R → LED G wire
+//        	out[i].b = uni->data[i * 3 + 2];
+//        }
+//    } else {
+//        memset(out, 0, num_leds * sizeof(rgb_color));
+//        out[0].r = 32;
+//    }
+//}
+
+//static void build_colors_from_universe(const DMX_Universe_t *uni,
+//                                       rgb_color *out,
+//                                       uint16_t num_leds)
+//{
+//    if (uni->valid) {
+//        for (uint16_t i = 0; i < num_leds; i++) {
+//            out[i].r = uni->data[i * 3 + 1];  // Madrix G → LED R wire
+//            out[i].g = uni->data[i * 3 + 0];  // Madrix R → LED G wire
+//            out[i].b = uni->data[i * 3 + 2];
+//        }
+//    } else {
+//        memset(out, 0, num_leds * sizeof(rgb_color));
+//        out[0].r = 32;  // dim red = waiting indicator
+//    }
+//}
+//
+//// Helper macro to start one strip if its DMA is free
+//#define PUSH_STRIP(idx, htim_inst, ch)                                  \
+//    if (!dma_busy[(idx)]) {                                             \
+//        set_pattern_led(leds[(idx)], dmx_colors[(idx)], NUMBER_OF_LEDS);\
+//        dma_busy[(idx)] = 1;                                            \
+//        HAL_TIM_PWM_Start_DMA(&(htim_inst), (ch),                       \
+//            (uint32_t *)leds[(idx)],                                    \
+//            NUMBER_OF_LEDS * 24 + 24);                                  \
+//    }
+
+
+
 static void build_colors_from_universe(const DMX_Universe_t *uni,
                                        rgb_color *out,
                                        uint16_t num_leds)
 {
     if (uni->valid) {
         for (uint16_t i = 0; i < num_leds; i++) {
-        	out[i].r = uni->data[i * 3 + 1];  // Madrix G → LED R wire
-        	out[i].g = uni->data[i * 3 + 0];  // Madrix R → LED G wire
-        	out[i].b = uni->data[i * 3 + 2];
+            out[i].r = uni->data[i * 3 + 1];
+            out[i].g = uni->data[i * 3 + 0];
+            out[i].b = uni->data[i * 3 + 2];
         }
     } else {
         memset(out, 0, num_leds * sizeof(rgb_color));
         out[0].r = 32;
     }
 }
+
+static void build_pin_colors(uint8_t pin_idx, uint8_t uni_base)
+{
+    for (uint8_t u = 0; u < UNIVERSES_PER_PIN; u++) {
+        build_colors_from_universe(
+            &dmx_universes[uni_base + u],
+            &dmx_colors[pin_idx][u * LEDS_PER_UNIVERSE],
+            LEDS_PER_UNIVERSE
+        );
+    }
+}
+
+#define PUSH_STRIP(pin_idx, htim_inst, ch)                                      \
+    if (!dma_busy[(pin_idx)]) {                                                 \
+        set_pattern_led(leds[(pin_idx)], dmx_colors[(pin_idx)], LEDS_PER_PIN); \
+        dma_busy[(pin_idx)] = 1;                                                \
+        HAL_TIM_PWM_Start_DMA(&(htim_inst), (ch),                               \
+            (uint32_t *)leds[(pin_idx)],                                        \
+            LEDS_PER_PIN * 24 + 24);                                            \
+    }
 
 /* USER CODE END 0 */
 
@@ -179,19 +274,19 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_TIM6_Init();
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_LWIP_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
-  MX_TIM2_Init();
-  MX_TIM1_Init();
   MX_TIM5_Init();
-  MX_TIM9_Init();
-  MX_TIM12_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-    artnet_init();
+//    artnet_init();
+
+  memset((uint8_t *)dma_busy, 0, sizeof(dma_busy));
+  artnet_init();
 
     // netif_set_flags(&gnetif, NETIF_FLAG_BROADCAST);
 
@@ -221,61 +316,139 @@ int main(void)
     /* USER CODE BEGIN 3 */
 
 	  //PD 12 ,PA 6
-	      MX_LWIP_Process();
+//	      MX_LWIP_Process();
+//
+//	      /* --- Timestamp & status LEDs --------------------------------------- */
+//	      uint32_t now = HAL_GetTick();
+//
+//	      static uint32_t last_pkt0 = 0, last_blink0 = 0;
+//	      static uint32_t last_pkt1 = 0, last_blink1 = 0;
+//
+//	      if (dmx_universes[0].packet_count != last_pkt0) {
+//	          last_pkt0   = dmx_universes[0].packet_count;
+//	          last_blink0 = now;
+//	      }
+//	      if (dmx_universes[1].packet_count != last_pkt1) {
+//	          last_pkt1   = dmx_universes[1].packet_count;
+//	          last_blink1 = now;
+//	      }
+//
+//	      // LD1 — ON when universe 0 has any master colour
+//	      HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	          (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+//	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	      // LD2 — blinks while universe 0 packets arrive
+//	      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	          ((now - last_blink0 < 500) && (now % 200 < 100))
+//	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	      // LD3 — blinks while universe 1 packets arrive
+//	      HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin,
+//	          ((now - last_blink1 < 500) && (now % 200 < 100))
+//	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	      /* --- Build colour buffers from each universe ----------------------- */
+//	      build_colors_from_universe(&dmx_universes[0], dmx_colors1, NUMBER_OF_LEDS);
+//	      build_colors_from_universe(&dmx_universes[1], dmx_colors2, NUMBER_OF_LEDS);
+//
+//	      /* --- Push strip 0 via TIM3 CH1 (PC6) ------------------------------ */
+//	      if (!dma_busy1) {
+//	          set_pattern_led(leds1, dmx_colors1, NUMBER_OF_LEDS);
+//	          dma_busy1 = 1;
+//	          HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
+//	                                (uint32_t *)leds1,
+//	                                NUMBER_OF_LEDS * 24 + 24);
+//	      }
+//
+//	      /* --- Push strip 1 via TIM4 CH1 (PB6) ------------------------------ */
+//	      if (!dma_busy2) {
+//	          set_pattern_led(leds2, dmx_colors2, NUMBER_OF_LEDS);
+//	          dma_busy2 = 1;
+//	          HAL_TIM_PWM_Start_DMA(&htim4, TIM_CHANNEL_1,
+//	                                (uint32_t *)leds2,
+//	                                NUMBER_OF_LEDS * 24 + 24);
+//	      }
+//
+//	      HAL_Delay(20);
 
-	      /* --- Timestamp & status LEDs --------------------------------------- */
+
+
+//	  MX_LWIP_Process();
+//
+//	     uint32_t now = HAL_GetTick();
+//
+//	     // --- Status LED blink on universe 0 packet activity ---
+//	     static uint32_t last_pkt0 = 0, last_blink0 = 0;
+//	     if (dmx_universes[0].packet_count != last_pkt0) {
+//	         last_pkt0   = dmx_universes[0].packet_count;
+//	         last_blink0 = now;
+//	     }
+//
+//	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	         ((now - last_blink0 < 500) && (now % 200 < 100))
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	     // --- Build color buffers for all 8 universes ---
+//	     for (int u = 0; u < 8; u++) {
+//	         build_colors_from_universe(&dmx_universes[u], dmx_colors[u], NUMBER_OF_LEDS);
+//	     }
+//
+//	     // --- Push all 8 strips ---
+//	     // TIM3: universes 0-3 → PC6, PC7, PC8, PC9
+//	     PUSH_STRIP(0, htim3, TIM_CHANNEL_1);
+//	     PUSH_STRIP(1, htim3, TIM_CHANNEL_2);
+//	     PUSH_STRIP(2, htim3, TIM_CHANNEL_3);
+//	     PUSH_STRIP(3, htim3, TIM_CHANNEL_4);
+//
+//	     // TIM4: universes 4-7 → PB6, PB7, PB8, PB9
+//	     PUSH_STRIP(4, htim4, TIM_CHANNEL_1);
+//	     PUSH_STRIP(5, htim4, TIM_CHANNEL_2);
+//	     PUSH_STRIP(6, htim4, TIM_CHANNEL_3);
+//	     PUSH_STRIP(7, htim4, TIM_CHANNEL_4);
+//
+//	     HAL_Delay(20);
+
+
+	  MX_LWIP_Process();
+
 	      uint32_t now = HAL_GetTick();
 
+	      // Status LED — blink LD2 on any universe 0 activity
 	      static uint32_t last_pkt0 = 0, last_blink0 = 0;
-	      static uint32_t last_pkt1 = 0, last_blink1 = 0;
-
 	      if (dmx_universes[0].packet_count != last_pkt0) {
 	          last_pkt0   = dmx_universes[0].packet_count;
 	          last_blink0 = now;
 	      }
-	      if (dmx_universes[1].packet_count != last_pkt1) {
-	          last_pkt1   = dmx_universes[1].packet_count;
-	          last_blink1 = now;
-	      }
-
-	      // LD1 — ON when universe 0 has any master colour
 	      HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
 	          (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
 	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
-	      // LD2 — blinks while universe 0 packets arrive
 	      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
 	          ((now - last_blink0 < 500) && (now % 200 < 100))
 	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-	      // LD3 — blinks while universe 1 packets arrive
-	      HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin,
-	          ((now - last_blink1 < 500) && (now % 200 < 100))
-	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+	      // Build all 6 pin color buffers (each = 3 universes concatenated)
+	      build_pin_colors(0,  0);   // PC6 ← uni 0,1,2
+	      build_pin_colors(1,  3);   // PC7 ← uni 3,4,5
+	      build_pin_colors(2,  6);   // PC8 ← uni 6,7,8
+	      build_pin_colors(3,  9);   // PC9 ← uni 9,10,11
+	      build_pin_colors(4, 12);   // PB6 ← uni 12,13,14
+	      build_pin_colors(5, 15);   // PB7 ← uni 15,16,17
 
-	      /* --- Build colour buffers from each universe ----------------------- */
-	      build_colors_from_universe(&dmx_universes[0], dmx_colors1, NUMBER_OF_LEDS);
-	      build_colors_from_universe(&dmx_universes[1], dmx_colors2, NUMBER_OF_LEDS);
-
-	      /* --- Push strip 0 via TIM3 CH1 (PC6) ------------------------------ */
-	      if (!dma_busy1) {
-	          set_pattern_led(leds1, dmx_colors1, NUMBER_OF_LEDS);
-	          dma_busy1 = 1;
-	          HAL_TIM_PWM_Start_DMA(&htim3, TIM_CHANNEL_1,
-	                                (uint32_t *)leds1,
-	                                NUMBER_OF_LEDS * 24 + 24);
-	      }
-
-	      /* --- Push strip 1 via TIM4 CH1 (PB6) ------------------------------ */
-	      if (!dma_busy2) {
-	          set_pattern_led(leds2, dmx_colors2, NUMBER_OF_LEDS);
-	          dma_busy2 = 1;
-	          HAL_TIM_PWM_Start_DMA(&htim4, TIM_CHANNEL_1,
-	                                (uint32_t *)leds2,
-	                                NUMBER_OF_LEDS * 24 + 24);
-	      }
+	      // Fire DMA on each pin if idle
+	      PUSH_STRIP(0, htim3, TIM_CHANNEL_1);  // PC6
+	      PUSH_STRIP(1, htim3, TIM_CHANNEL_2);  // PC7
+	      PUSH_STRIP(2, htim3, TIM_CHANNEL_3);  // PC8
+	      PUSH_STRIP(3, htim3, TIM_CHANNEL_4);  // PC9
+	      PUSH_STRIP(4, htim4, TIM_CHANNEL_1);  // PB6
+	      PUSH_STRIP(5, htim4, TIM_CHANNEL_2);  // PB7
 
 	      HAL_Delay(20);
+
 
   }
   /* USER CODE END 3 */
@@ -338,6 +511,7 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
@@ -352,6 +526,15 @@ static void MX_TIM1_Init(void)
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -370,18 +553,6 @@ static void MX_TIM1_Init(void)
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -452,18 +623,6 @@ static void MX_TIM2_Init(void)
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -660,138 +819,6 @@ static void MX_TIM5_Init(void)
 }
 
 /**
-  * @brief TIM6 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM6_Init(void)
-{
-
-  /* USER CODE BEGIN TIM6_Init 0 */
-
-  /* USER CODE END TIM6_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM6_Init 1 */
-
-  /* USER CODE END TIM6_Init 1 */
-  htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 8999;
-  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 2000;
-  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM6_Init 2 */
-
-  /* USER CODE END TIM6_Init 2 */
-
-}
-
-/**
-  * @brief TIM9 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM9_Init(void)
-{
-
-  /* USER CODE BEGIN TIM9_Init 0 */
-
-  /* USER CODE END TIM9_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM9_Init 1 */
-
-  /* USER CODE END TIM9_Init 1 */
-  htim9.Instance = TIM9;
-  htim9.Init.Prescaler = 0;
-  htim9.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim9.Init.Period = 65535;
-  htim9.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim9.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim9) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim9, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim9) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim9, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim9, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM9_Init 2 */
-
-  /* USER CODE END TIM9_Init 2 */
-  HAL_TIM_MspPostInit(&htim9);
-
-}
-
-/**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
-
-  /* USER CODE BEGIN TIM12_Init 0 */
-
-  /* USER CODE END TIM12_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-
-  /* USER CODE BEGIN TIM12_Init 1 */
-
-  /* USER CODE END TIM12_Init 1 */
-  htim12.Instance = TIM12;
-  htim12.Init.Prescaler = 0;
-  htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim12.Init.Period = 65535;
-  htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM12_Init 2 */
-
-  /* USER CODE END TIM12_Init 2 */
-
-}
-
-/**
   * @brief USART3 Initialization Function
   * @param None
   * @retval None
@@ -897,15 +924,12 @@ static void MX_DMA_Init(void)
   /* DMA2_Stream1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
-  /* DMA2_Stream2_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
   /* DMA2_Stream4_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
-  /* DMA2_Stream6_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
+  /* DMA2_Stream5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream5_IRQn);
 
 }
 
@@ -922,11 +946,11 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
@@ -969,15 +993,49 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+//void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+//{
+//    if (htim->Instance == TIM3) {
+//        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
+//        dma_busy1 = 0;
+//    }
+//    else if (htim->Instance == TIM4) {
+//        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
+//        dma_busy2 = 0;
+//    }
+//}
+
+//void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
+//{
+//    if (htim->Instance == TIM3) {
+//        uint32_t ch = htim->Channel;
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[0] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[1] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_3) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_3); dma_busy[2] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_4) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_4); dma_busy[3] = 0; }
+//    }
+//    else if (htim->Instance == TIM4) {
+//        uint32_t ch = htim->Channel;
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[4] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[5] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_3) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_3); dma_busy[6] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_4) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_4); dma_busy[7] = 0; }
+//    }
+//}
+
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM3) {
-        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
-        dma_busy1 = 0;
+        uint32_t ch = htim->Channel;
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[0] = 0; }
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[1] = 0; }
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_3) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_3); dma_busy[2] = 0; }
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_4) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_4); dma_busy[3] = 0; }
     }
     else if (htim->Instance == TIM4) {
-        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1);
-        dma_busy2 = 0;
+        uint32_t ch = htim->Channel;
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[4] = 0; }
+        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[5] = 0; }
     }
 }
 /* USER CODE END 4 */

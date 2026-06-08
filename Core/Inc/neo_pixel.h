@@ -19,11 +19,11 @@ typedef struct
 //    uint16_t b[8];
 //} neopixel_led;
 
-typedef struct {
-    uint16_t r[8];   // WS2811: R first
-    uint16_t g[8];   // G second
-    uint16_t b[8];   // B third
-} neopixel_led;
+//typedef struct {
+//    uint16_t r[8];   // WS2811: R first
+//    uint16_t g[8];   // G second
+//    uint16_t b[8];   // B third
+//} neopixel_led;
 
 // 1.25 us - period
 // logical 1 - 0.8 us high
@@ -33,6 +33,15 @@ typedef struct {
 // CCR = 15 -> 0.8 us high
 // CCR = 7  -> 0.4 us high
 // have to be modified based on the Auto reload value
+//#define LED_LOGICAL_ONE  15
+//#define LED_LOGICAL_ZERO 7
+
+typedef struct {
+    uint16_t r[8];
+    uint16_t g[8];
+    uint16_t b[8];
+} neopixel_led;
+
 #define LED_LOGICAL_ONE  15
 #define LED_LOGICAL_ZERO 7
 

@@ -1,4 +1,3 @@
-/* artnet.h — Art-Net receiver for STM32 Nucleo-F429ZI + LwIP bare-metal */
 #ifndef INC_ARTNET_H_
 #define INC_ARTNET_H_
 
@@ -12,4 +11,4 @@ void artnet_stop(void);
 void artnet_receive(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                     const ip_addr_t *addr, u16_t port);
 
-#endif /* INC_ARTNET_H_ */
+#endif
