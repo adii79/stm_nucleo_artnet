@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define DMX_UNIVERSE_COUNT  18
+#define DMX_UNIVERSE_COUNT  18   /* 6 pins × 3 universes */
 #define DMX_CHANNELS        512
 
 typedef struct {

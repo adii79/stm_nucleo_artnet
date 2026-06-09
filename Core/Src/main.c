@@ -206,19 +206,47 @@ static void MX_TIM2_Init(void);
 
 
 
+//static void build_colors_from_universe(const DMX_Universe_t *uni,
+//                                       rgb_color *out,
+//                                       uint16_t num_leds)
+//{
+//    if (uni->valid) {
+//        for (uint16_t i = 0; i < num_leds; i++) {
+//            out[i].r = uni->data[i * 3 + 1];
+//            out[i].g = uni->data[i * 3 + 0];
+//            out[i].b = uni->data[i * 3 + 2];
+//        }
+//    } else {
+//        memset(out, 0, num_leds * sizeof(rgb_color));
+//        out[0].r = 32;
+//    }
+//}
+//
+//static void build_pin_colors(uint8_t pin_idx, uint8_t uni_base)
+//{
+//    for (uint8_t u = 0; u < UNIVERSES_PER_PIN; u++) {
+//        build_colors_from_universe(
+//            &dmx_universes[uni_base + u],
+//            &dmx_colors[pin_idx][u * LEDS_PER_UNIVERSE],
+//            LEDS_PER_UNIVERSE
+//        );
+//    }
+//}
+
 static void build_colors_from_universe(const DMX_Universe_t *uni,
                                        rgb_color *out,
                                        uint16_t num_leds)
 {
     if (uni->valid) {
         for (uint16_t i = 0; i < num_leds; i++) {
-            out[i].r = uni->data[i * 3 + 1];
-            out[i].g = uni->data[i * 3 + 0];
+            /* Straight RGB assignment — struct field order handles wire order */
+            out[i].r = uni->data[i * 3 + 0];
+            out[i].g = uni->data[i * 3 + 1];
             out[i].b = uni->data[i * 3 + 2];
         }
     } else {
         memset(out, 0, num_leds * sizeof(rgb_color));
-        out[0].r = 32;
+        out[0].r = 32;   /* dim red = waiting indicator */
     }
 }
 
@@ -231,6 +259,13 @@ static void build_pin_colors(uint8_t pin_idx, uint8_t uni_base)
             LEDS_PER_UNIVERSE
         );
     }
+}
+
+/* Ensure reset slot is zeroed — only needs to happen once at startup */
+static void init_leds_reset_slots(void)
+{
+    for (uint8_t p = 0; p < NUM_PINS; p++)
+        memset(&leds[p][LEDS_PER_PIN], 0, sizeof(neopixel_led));
 }
 
 #define PUSH_STRIP(pin_idx, htim_inst, ch)                                      \
@@ -414,40 +449,66 @@ int main(void)
 //	     HAL_Delay(20);
 
 
+//	  MX_LWIP_Process();
+//
+//	      uint32_t now = HAL_GetTick();
+//
+//	      // Status LED — blink LD2 on any universe 0 activity
+//	      static uint32_t last_pkt0 = 0, last_blink0 = 0;
+//	      if (dmx_universes[0].packet_count != last_pkt0) {
+//	          last_pkt0   = dmx_universes[0].packet_count;
+//	          last_blink0 = now;
+//	      }
+//	      HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	          (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+//	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//	      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	          ((now - last_blink0 < 500) && (now % 200 < 100))
+//	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//	      // Build all 6 pin color buffers (each = 3 universes concatenated)
+//	      build_pin_colors(0,  0);   // PC6 ← uni 0,1,2
+//	      build_pin_colors(1,  3);   // PC7 ← uni 3,4,5
+//	      build_pin_colors(2,  6);   // PC8 ← uni 6,7,8
+//	      build_pin_colors(3,  9);   // PC9 ← uni 9,10,11
+//	      build_pin_colors(4, 12);   // PB6 ← uni 12,13,14
+//	      build_pin_colors(5, 15);   // PB7 ← uni 15,16,17
+//
+//	      // Fire DMA on each pin if idle
+//	      PUSH_STRIP(0, htim3, TIM_CHANNEL_1);  // PC6
+//	      PUSH_STRIP(1, htim3, TIM_CHANNEL_2);  // PC7
+//	      PUSH_STRIP(2, htim3, TIM_CHANNEL_3);  // PC8
+//	      PUSH_STRIP(3, htim3, TIM_CHANNEL_4);  // PC9
+//	      PUSH_STRIP(4, htim4, TIM_CHANNEL_1);  // PB6
+//	      PUSH_STRIP(5, htim4, TIM_CHANNEL_2);  // PB7
+//
+//	      HAL_Delay(20);
+
 	  MX_LWIP_Process();
 
-	      uint32_t now = HAL_GetTick();
+	     uint32_t now = HAL_GetTick();
 
-	      // Status LED — blink LD2 on any universe 0 activity
-	      static uint32_t last_pkt0 = 0, last_blink0 = 0;
-	      if (dmx_universes[0].packet_count != last_pkt0) {
-	          last_pkt0   = dmx_universes[0].packet_count;
-	          last_blink0 = now;
-	      }
-	      HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
-	          (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
-	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
-	      HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
-	          ((now - last_blink0 < 500) && (now % 200 < 100))
-	              ? GPIO_PIN_SET : GPIO_PIN_RESET);
+	     // Status LED blink
+	     static uint32_t last_pkt0 = 0, last_blink0 = 0;
+	     if (dmx_universes[0].packet_count != last_pkt0) {
+	         last_pkt0   = dmx_universes[0].packet_count;
+	         last_blink0 = now;
+	     }
+	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+	         ((now - last_blink0 < 500) && (now % 200 < 100))
+	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-	      // Build all 6 pin color buffers (each = 3 universes concatenated)
-	      build_pin_colors(0,  0);   // PC6 ← uni 0,1,2
-	      build_pin_colors(1,  3);   // PC7 ← uni 3,4,5
-	      build_pin_colors(2,  6);   // PC8 ← uni 6,7,8
-	      build_pin_colors(3,  9);   // PC9 ← uni 9,10,11
-	      build_pin_colors(4, 12);   // PB6 ← uni 12,13,14
-	      build_pin_colors(5, 15);   // PB7 ← uni 15,16,17
-
-	      // Fire DMA on each pin if idle
-	      PUSH_STRIP(0, htim3, TIM_CHANNEL_1);  // PC6
-	      PUSH_STRIP(1, htim3, TIM_CHANNEL_2);  // PC7
-	      PUSH_STRIP(2, htim3, TIM_CHANNEL_3);  // PC8
-	      PUSH_STRIP(3, htim3, TIM_CHANNEL_4);  // PC9
-	      PUSH_STRIP(4, htim4, TIM_CHANNEL_1);  // PB6
-	      PUSH_STRIP(5, htim4, TIM_CHANNEL_2);  // PB7
-
-	      HAL_Delay(20);
+	     // Only build + push a pin if its DMA is idle
+	     // This prevents writing dmx_colors[] while set_pattern_led() is reading it
+	     if (!dma_busy[0]) { build_pin_colors(0,  0); PUSH_STRIP(0, htim3, TIM_CHANNEL_1); }
+	     if (!dma_busy[1]) { build_pin_colors(1,  3); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
+	     if (!dma_busy[2]) { build_pin_colors(2,  6); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
+	     if (!dma_busy[3]) { build_pin_colors(3,  9); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
+	     if (!dma_busy[4]) { build_pin_colors(4, 12); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
+	     if (!dma_busy[5]) { build_pin_colors(5, 15); PUSH_STRIP(5, htim4, TIM_CHANNEL_2); }
 
 
   }
