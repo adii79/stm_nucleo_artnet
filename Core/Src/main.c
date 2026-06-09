@@ -75,7 +75,7 @@
 //#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)
 //#define NUM_PINS            6
 
-#define LEDS_PER_UNIVERSE   10
+#define LEDS_PER_UNIVERSE   170
 #define UNIVERSES_PER_PIN   4
 #define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)  // 680
 #define NUM_PINS            5
