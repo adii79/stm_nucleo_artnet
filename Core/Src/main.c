@@ -70,10 +70,15 @@
 //static volatile uint8_t dma_busy[NUM_PINS];
 
 
-#define LEDS_PER_UNIVERSE   170
-#define UNIVERSES_PER_PIN   3
-#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)
-#define NUM_PINS            6
+//#define LEDS_PER_UNIVERSE   170
+//#define UNIVERSES_PER_PIN   3
+//#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)
+//#define NUM_PINS            6
+
+#define LEDS_PER_UNIVERSE   10
+#define UNIVERSES_PER_PIN   4
+#define LEDS_PER_PIN        (LEDS_PER_UNIVERSE * UNIVERSES_PER_PIN)  // 680
+#define NUM_PINS            5
 
 /* DMA reads this directly — MUST stay in main SRAM, never move to CCM */
 neopixel_led leds[NUM_PINS][LEDS_PER_PIN + 1];
@@ -503,12 +508,18 @@ int main(void)
 
 	     // Only build + push a pin if its DMA is idle
 	     // This prevents writing dmx_colors[] while set_pattern_led() is reading it
+//	     if (!dma_busy[0]) { build_pin_colors(0,  0); PUSH_STRIP(0, htim3, TIM_CHANNEL_1); }
+//	     if (!dma_busy[1]) { build_pin_colors(1,  3); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
+//	     if (!dma_busy[2]) { build_pin_colors(2,  6); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
+//	     if (!dma_busy[3]) { build_pin_colors(3,  9); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
+//	     if (!dma_busy[4]) { build_pin_colors(4, 12); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
+//	     if (!dma_busy[5]) { build_pin_colors(5, 15); PUSH_STRIP(5, htim4, TIM_CHANNEL_2); }
+
 	     if (!dma_busy[0]) { build_pin_colors(0,  0); PUSH_STRIP(0, htim3, TIM_CHANNEL_1); }
-	     if (!dma_busy[1]) { build_pin_colors(1,  3); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
-	     if (!dma_busy[2]) { build_pin_colors(2,  6); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
-	     if (!dma_busy[3]) { build_pin_colors(3,  9); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
-	     if (!dma_busy[4]) { build_pin_colors(4, 12); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
-	     if (!dma_busy[5]) { build_pin_colors(5, 15); PUSH_STRIP(5, htim4, TIM_CHANNEL_2); }
+	     if (!dma_busy[1]) { build_pin_colors(1,  4); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
+	     if (!dma_busy[2]) { build_pin_colors(2,  8); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
+	     if (!dma_busy[3]) { build_pin_colors(3, 12); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
+	     if (!dma_busy[4]) { build_pin_colors(4, 16); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
 
 
   }
@@ -1096,7 +1107,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
     else if (htim->Instance == TIM4) {
         uint32_t ch = htim->Channel;
         if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[4] = 0; }
-        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[5] = 0; }
+//        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[5] = 0; }
     }
 }
 /* USER CODE END 4 */
