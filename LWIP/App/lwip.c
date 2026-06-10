@@ -26,6 +26,7 @@
 #include "lwip/sio.h"
 #endif /* MDK ARM Compiler */
 #include "ethernetif.h"
+#include "main.h"
 
 /* USER CODE BEGIN 0 */
 
@@ -60,19 +61,31 @@ uint8_t GATEWAY_ADDRESS[4];
 void MX_LWIP_Init(void)
 {
   /* IP addresses initialization */
-  IP_ADDRESS[0] = 192;
-  IP_ADDRESS[1] = 168;
-  IP_ADDRESS[2] = 1;
-  IP_ADDRESS[3] = 245;
-  NETMASK_ADDRESS[0] = 255;
-  NETMASK_ADDRESS[1] = 255;
-  NETMASK_ADDRESS[2] = 255;
-  NETMASK_ADDRESS[3] = 0;
-  GATEWAY_ADDRESS[0] = 198;
-  GATEWAY_ADDRESS[1] = 168;
-  GATEWAY_ADDRESS[2] = 1;
-  GATEWAY_ADDRESS[3] = 1;
+//  IP_ADDRESS[0] = ip0;
+//  IP_ADDRESS[1] = ip1;
+//  IP_ADDRESS[2] = ip2;
+//  IP_ADDRESS[3] = ip3;
+//  NETMASK_ADDRESS[0] = 255;
+//  NETMASK_ADDRESS[1] = 255;
+//  NETMASK_ADDRESS[2] = 255;
+//  NETMASK_ADDRESS[3] = 0;
+//  GATEWAY_ADDRESS[0] = 198;
+//  GATEWAY_ADDRESS[1] = 168;
+//  GATEWAY_ADDRESS[2] = 1;
+//  GATEWAY_ADDRESS[3] = 1;
 
+   IP_ADDRESS[0] = 192;
+   IP_ADDRESS[1] = 168;
+   IP_ADDRESS[2] = 1;
+   IP_ADDRESS[3] = 245;
+   NETMASK_ADDRESS[0] = 255;
+   NETMASK_ADDRESS[1] = 255;
+   NETMASK_ADDRESS[2] = 255;
+   NETMASK_ADDRESS[3] = 0;
+   GATEWAY_ADDRESS[0] = 198;
+   GATEWAY_ADDRESS[1] = 168;
+   GATEWAY_ADDRESS[2] = 1;
+   GATEWAY_ADDRESS[3] = 1;
 /* USER CODE BEGIN IP_ADDRESSES */
 /* USER CODE END IP_ADDRESSES */
 

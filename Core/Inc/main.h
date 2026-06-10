@@ -55,7 +55,39 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
+/*
+struct netif gnetif;
+ip4_addr_t ipaddr;
+ip4_addr_t netmask;
+ip4_addr_t gw;
+uint8_t IP_ADDRESS[4];
+uint8_t NETMASK_ADDRESS[4];
+uint8_t GATEWAY_ADDRESS[4];
+  IP_ADDRESS[0] = 192;
+  IP_ADDRESS[1] = 168;
+  IP_ADDRESS[2] = 1;
+  IP_ADDRESS[3] = 245;
+  NETMASK_ADDRESS[0] = 255;
+  NETMASK_ADDRESS[1] = 255;
+  NETMASK_ADDRESS[2] = 255;
+  NETMASK_ADDRESS[3] = 0;
+  GATEWAY_ADDRESS[0] = 198;
+  GATEWAY_ADDRESS[1] = 168;
+  GATEWAY_ADDRESS[2] = 1;
+  GATEWAY_ADDRESS[3] = 1;
 
+*/
+//extern uint8_t ip0 = 192;
+//extern uint8_t ip1 = 168;
+//extern uint8_t ip2 = 1;
+//extern uint8_t ip3 = 245;
+//extern int8_t nmask0 = 255;
+//extern int8_t nmask1= 255;
+//extern int8_t nmask2= 255;
+//extern int8_t nmask3= 0;
+
+
+ 
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
