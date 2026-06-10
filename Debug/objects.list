@@ -1,5 +1,6 @@
 "./Core/Src/artnet.o"
 "./Core/Src/dmx_buffer.o"
+"./Core/Src/ip_config.o"
 "./Core/Src/main.o"
 "./Core/Src/neo_pixel.o"
 "./Core/Src/stm32f4xx_hal_msp.o"

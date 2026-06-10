@@ -2,7 +2,7 @@
 #define INC_NEO_PIXEL_H_
 
 #include "main.h"
-
+#include "ip_config.h"
 typedef struct {
     uint8_t r;
     uint8_t g;
@@ -24,8 +24,8 @@ typedef struct {
  * ONE  = 17 → ~0.81 µs high  (WS2811 spec: 0.7 µs ± 150 ns)
  * ZERO =  8 → ~0.38 µs high  (WS2811 spec: 0.35 µs ± 150 ns)
  */
-#define LED_LOGICAL_ONE  15
-#define LED_LOGICAL_ZERO 7
+// #define LED_LOGICAL_ONE  15
+// #define LED_LOGICAL_ZERO 7
 
 void reset_all_leds(neopixel_led *leds, uint16_t number_leds);
 void set_all_leds(neopixel_led *leds, uint16_t number_leds);

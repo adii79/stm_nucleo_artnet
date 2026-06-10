@@ -59,7 +59,8 @@ Core/Src/artnet.o: ../Core/Src/artnet.c ../Core/Inc/artnet.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/ip.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/udp.h \
  ../Core/Inc/dmx_buffer.h \
- ../Middlewares/Third_Party/LwIP/src/include/lwip/inet.h
+ ../Middlewares/Third_Party/LwIP/src/include/lwip/inet.h \
+ ../Core/Inc/ip_config.h
 ../Core/Inc/artnet.h:
 ../Middlewares/Third_Party/LwIP/src/include/lwip/opt.h:
 ../LWIP/Target/lwipopts.h:
@@ -123,3 +124,4 @@ Core/Src/artnet.o: ../Core/Src/artnet.c ../Core/Inc/artnet.h \
 ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/udp.h:
 ../Core/Inc/dmx_buffer.h:
 ../Middlewares/Third_Party/LwIP/src/include/lwip/inet.h:
+../Core/Inc/ip_config.h:

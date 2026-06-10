@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
-
+#include "ip_config.h"
 /* =========================================================================
  * Art-Net constants
  * ========================================================================= */
@@ -110,10 +110,18 @@ void artnet_init(void)
     s_reply.opcode = (uint16_t)OP_POLL_REPLY;
 
     /* Node IP — must match your LwIP static IP */
-    s_reply.ip_addr[0] = 192;
-    s_reply.ip_addr[1] = 168;
-    s_reply.ip_addr[2] = 1;
-    s_reply.ip_addr[3] = 245;
+    // s_reply.ip_addr[0] = 192;
+    // s_reply.ip_addr[1] = 168;
+    // s_reply.ip_addr[2] = 1;
+    // s_reply.ip_addr[3] = 245;
+    
+
+
+
+    s_reply.ip_addr[0] = ip_Con[0];
+    s_reply.ip_addr[1] = ip_Con[1];
+    s_reply.ip_addr[2] = ip_Con[2];
+    s_reply.ip_addr[3] = ip_Con[3];
 
     s_reply.port   = 0x1936;   /* 6454 little-endian */
     s_reply.ver_hi = 0x00;

@@ -26,6 +26,7 @@
 #include "artnet.h"
 #include "dmx_buffer.h"
 #include "neo_pixel.h"
+#include "ip_config.h"
 // #include "lwip/netif.h"
 /* USER CODE END Includes */
 
