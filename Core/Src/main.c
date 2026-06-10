@@ -27,6 +27,7 @@
 #include "dmx_buffer.h"
 #include "neo_pixel.h"
 #include "ip_config.h"
+#include "lwip/apps/httpd.h"
 // #include "lwip/netif.h"
 /* USER CODE END Includes */
 
@@ -71,15 +72,9 @@ static volatile uint8_t dma_busy[NUM_PINS];
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
-DMA_HandleTypeDef hdma_tim1_ch1;
-DMA_HandleTypeDef hdma_tim1_ch4_trig_com;
-DMA_HandleTypeDef hdma_tim1_up;
-DMA_HandleTypeDef hdma_tim2_up_ch3;
 DMA_HandleTypeDef hdma_tim3_ch1_trig;
 DMA_HandleTypeDef hdma_tim3_ch2;
 DMA_HandleTypeDef hdma_tim3_ch3;
@@ -93,6 +88,12 @@ UART_HandleTypeDef huart3;
 PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 /* USER CODE BEGIN PV */
+
+int blue = 0;
+int green = 0;
+int red = 0;
+
+
 //neopixel_led leds[NUMBER_OF_LEDS + 1];
 //static rgb_color dmx_colors[NUMBER_OF_LEDS];
 //static uint8_t dma_busy1 = 0;                // guard flag
@@ -107,10 +108,9 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
-static void MX_TIM1_Init(void);
-static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
+const char *LedControlCgiHandler(int iIndex, int iNumParams, char *pcParam[], char *pcValue[]);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -165,7 +165,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	tCGI LED_CGI = {"/LEDControl.cgi", LedControlCgiHandler};
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -193,10 +193,13 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
-  MX_TIM1_Init();
-  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 //    artnet_init();
+
+  httpd_init();
+  uint32_t count = 0;
+  http_set_cgi_handlers(&LED_CGI,1);
+
 
   memset((uint8_t *)dma_busy, 0, sizeof(dma_busy));
   artnet_init();
@@ -213,27 +216,29 @@ int main(void)
 
 	  MX_LWIP_Process();
 
+	  	 HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0, blue);
 	     uint32_t now = HAL_GetTick();
 
+
 	     // Status LED blink
-	     static uint32_t last_pkt0 = 0, last_blink0 = 0;
-	     if (dmx_universes[0].packet_count != last_pkt0) {
-	         last_pkt0   = dmx_universes[0].packet_count;
-	         last_blink0 = now;
-	     }
-	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
-	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
-	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
-	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
-	         ((now - last_blink0 < 500) && (now % 200 < 100))
-	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
-
-
-	     if (!dma_busy[0]) { build_pin_colors(0,  0); PUSH_STRIP(0, htim3, TIM_CHANNEL_1); }
-	     if (!dma_busy[1]) { build_pin_colors(1,  4); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
-	     if (!dma_busy[2]) { build_pin_colors(2,  8); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
-	     if (!dma_busy[3]) { build_pin_colors(3, 12); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
-	     if (!dma_busy[4]) { build_pin_colors(4, 16); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
+//	     static uint32_t last_pkt0 = 0, last_blink0 = 0;
+//	     if (dmx_universes[0].packet_count != last_pkt0) {
+//	         last_pkt0   = dmx_universes[0].packet_count;
+//	         last_blink0 = now;
+//	     }
+//	     HAL_GPIO_WritePin(LD1_GPIO_Port, LD1_Pin,
+//	         (dmx_universes[0].data[0] | dmx_universes[0].data[1] | dmx_universes[0].data[2])
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//	     HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin,
+//	         ((now - last_blink0 < 500) && (now % 200 < 100))
+//	             ? GPIO_PIN_SET : GPIO_PIN_RESET);
+//
+//
+//	     if (!dma_busy[0]) { build_pin_colors(0,  0); PUSH_STRIP(0, htim3, TIM_CHANNEL_1); }
+//	     if (!dma_busy[1]) { build_pin_colors(1,  4); PUSH_STRIP(1, htim3, TIM_CHANNEL_2); }
+//	     if (!dma_busy[2]) { build_pin_colors(2,  8); PUSH_STRIP(2, htim3, TIM_CHANNEL_3); }
+//	     if (!dma_busy[3]) { build_pin_colors(3, 12); PUSH_STRIP(3, htim3, TIM_CHANNEL_4); }
+//	     if (!dma_busy[4]) { build_pin_colors(4, 16); PUSH_STRIP(4, htim4, TIM_CHANNEL_1); }
 
 
   }
@@ -283,140 +288,6 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM1_Init(void)
-{
-
-  /* USER CODE BEGIN TIM1_Init 0 */
-
-  /* USER CODE END TIM1_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
-
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
-
-  /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
-
-}
-
-/**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
-
 }
 
 /**
@@ -680,15 +551,11 @@ static void MX_DMA_Init(void)
 
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
-  __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
   /* DMA1_Stream0_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
-  /* DMA1_Stream1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
   /* DMA1_Stream2_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
@@ -707,15 +574,6 @@ static void MX_DMA_Init(void)
   /* DMA1_Stream7_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream7_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream7_IRQn);
-  /* DMA2_Stream1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
-  /* DMA2_Stream4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
-  /* DMA2_Stream5_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA2_Stream5_IRQn);
 
 }
 
@@ -736,7 +594,6 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
@@ -794,6 +651,50 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
         if (ch == HAL_TIM_ACTIVE_CHANNEL_1) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_1); dma_busy[4] = 0; }
 //        if (ch == HAL_TIM_ACTIVE_CHANNEL_2) { HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_2); dma_busy[5] = 0; }
     }
+}
+
+const char *LedControlCgiHandler(int index, int numParams, char *pcParam[], char *pcValue[])
+{
+  if(index == 0)
+  {
+    for(int i=0; i < numParams; i++)
+    {
+      if(strcmp(pcParam[i], "green") == 0)
+      {
+        if(strcmp(pcValue[i], "ON") == 0)
+        {
+          green = 1;
+        }
+        else
+        {
+          green = 0;
+        }
+      }
+      else if(strcmp(pcParam[i], "blue") == 0)
+      {
+        if(strcmp(pcValue[i], "ON") == 0)
+        {
+          blue = 1;
+        }
+        else
+        {
+          blue = 0;
+        }
+      }
+      else if(strcmp(pcParam[i], "red") == 0)
+      {
+        if(strcmp(pcValue[i], "ON") == 0)
+        {
+          red = 1;
+        }
+        else
+        {
+          red = 0;
+        }
+      }
+    }
+  }
+  return "/index.html";
 }
 /* USER CODE END 4 */
 

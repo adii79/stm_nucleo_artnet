@@ -87,12 +87,7 @@ typedef struct
 } RxBuff_t;
 
 /* Memory Pool Declaration */
-//#define ETH_RX_BUFFER_CNT             12U
-#define ETH_RX_BUFFER_CNT             4U
-#define ETH_RX_BUFFER_SIZE            1524U
-
-#define ETH_RX_BUFFER_COUNT     2
-#define ETH_TX_BUFFER_COUNT     2
+#define ETH_RX_BUFFER_CNT             12U
 LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
 
 /* Variable Definitions */

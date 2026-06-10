@@ -1,7 +1,7 @@
 #include "ip_config.h"
 
 uint8_t ip_Con[4] = {
-		192, 168, 1, 245
+		192, 168, 0, 245
 };
 
 uint8_t NETMASK_ADDRESS_Con[4] = {

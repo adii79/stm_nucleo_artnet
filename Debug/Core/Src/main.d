@@ -69,7 +69,10 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/ip.h \
  ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/udp.h \
  ../Core/Inc/dmx_buffer.h ../Core/Inc/neo_pixel.h ../Core/Inc/main.h \
- ../Core/Inc/ip_config.h ../Core/Inc/ip_config.h
+ ../Core/Inc/ip_config.h ../Core/Inc/ip_config.h \
+ ../Middlewares/Third_Party/LwIP/src/include/lwip/apps/httpd.h \
+ ../Middlewares/Third_Party/LwIP/src/include/lwip/apps/httpd_opts.h \
+ ../Middlewares/Third_Party/LwIP/src/include/lwip/prot/iana.h
 ../Core/Inc/main.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
 ../Core/Inc/stm32f4xx_hal_conf.h:
@@ -146,3 +149,6 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/main.h:
 ../Core/Inc/ip_config.h:
 ../Core/Inc/ip_config.h:
+../Middlewares/Third_Party/LwIP/src/include/lwip/apps/httpd.h:
+../Middlewares/Third_Party/LwIP/src/include/lwip/apps/httpd_opts.h:
+../Middlewares/Third_Party/LwIP/src/include/lwip/prot/iana.h:
