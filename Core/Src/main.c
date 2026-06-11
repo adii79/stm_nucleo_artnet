@@ -216,7 +216,9 @@ int main(void)
 
 	  MX_LWIP_Process();
 
-	  	 HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0, blue);
+	  	 HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0, red);
+		 HAL_GPIO_WritePin(GPIOB,GPIO_PIN_14, red);
+		 HAL_GPIO_WritePin(GPIOB,GPIO_PIN_7, red);
 	     uint32_t now = HAL_GetTick();
 
 
